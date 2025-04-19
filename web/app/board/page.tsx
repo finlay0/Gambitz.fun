@@ -71,7 +71,7 @@ const MoveHistory = ({ moves, currentMove, onMoveClick }: MoveHistoryProps) => {
 
 const BoardPage = () => {
   const [stakeLamports] = useStakeSelector();
-  const { status, matchPda } = useMatchmaker(stakeLamports);
+  const { state, matchPda } = useMatchmaker(stakeLamports);
   const wallet = useAnchorWallet();
   const { connection } = useConnection();
   const [game] = useState(() => new Chess());
@@ -97,10 +97,10 @@ const BoardPage = () => {
 
   // Start timers when game starts
   useEffect(() => {
-    if (status === 'matched') {
+    if (state === 'matched') {
       startTimers();
     }
-  }, [status, startTimers]);
+  }, [state, startTimers]);
 
   const getErrorMessage = (error: any, variant: string): string => {
     if (error.message?.includes('insufficient funds')) {
@@ -153,7 +153,7 @@ const BoardPage = () => {
 
   // Add timeout check in the timer effect
   useEffect(() => {
-    if (status === 'matched') {
+    if (state === 'matched') {
       const checkTimeout = () => {
         if (timers.white <= 0) {
           handleTimeout();
@@ -165,19 +165,19 @@ const BoardPage = () => {
       const interval = setInterval(checkTimeout, 1000);
       return () => clearInterval(interval);
     }
-  }, [status, timers.white, timers.black]);
+  }, [state, timers.white, timers.black]);
 
   // Add disconnect handling
   useEffect(() => {
     const handleBeforeUnload = () => {
-      if (status === 'matched' && !isSubmitting) {
+      if (state === 'matched' && !isSubmitting) {
         handleDisconnect();
       }
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [status, isSubmitting]);
+  }, [state, isSubmitting]);
 
   const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
     const move = game.move({
@@ -222,7 +222,7 @@ const BoardPage = () => {
     setCurrentMove(moves.length - 1);
   };
 
-  if (status === 'searching') {
+  if (state === 'searching') {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
