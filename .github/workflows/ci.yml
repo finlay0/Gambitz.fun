@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo
+            ~/.pnpm-store
+          key: ${{ runner.os }}-cargo-pnpm-${{ hashFiles('**/Cargo.lock', '**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-pnpm-
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install nightly-2025-04-16
+          rustup default nightly-2025-04-16
+          cargo install --git https://github.com/solana-foundation/anchor anchor-cli --force --locked
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 10.8.1
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Test web build
+        run: pnpm --filter ./web... dev --dry-run
+
+      - name: Test contracts
+        run: cargo test --manifest-path contracts/Cargo.toml 
