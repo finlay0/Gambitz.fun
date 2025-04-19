@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "target": "esnext",
+    "target": "es5",
     "lib": [
       "dom",
       "dom.iterable",
@@ -13,32 +13,38 @@
     "noEmit": true,
     "esModuleInterop": true,
     "module": "esnext",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "preserve",
-    "baseUrl": ".",
-    "paths": {
-      "@/*": [
-        "*"
-      ]
-    },
-    "types": [
-      "node",
-      "react",
-      "react-dom"
-    ],
     "incremental": true,
     "plugins": [
       {
         "name": "next"
       }
-    ]
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@/components/*": [
+        "components/*"
+      ],
+      "@/hooks/*": [
+        "src/hooks/*"
+      ],
+      "@/types/*": [
+        "src/types/*"
+      ],
+      "@/idl/*": [
+        "src/idl/*"
+      ]
+    },
+    "allowSyntheticDefaultImports": true
   },
   "include": [
-    "next-env.d.ts",
     "**/*.ts",
     "**/*.tsx",
+    "next-env.d.ts",
+    "src/types/**/*.ts",
     ".next/types/**/*.ts"
   ],
   "exclude": [

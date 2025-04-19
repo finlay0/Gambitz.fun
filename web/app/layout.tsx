@@ -2,6 +2,10 @@ import type { Metadata } from "next";
 // import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { WalletProviders } from "@/components/WalletProviders";
+import { Inter } from 'next/font/google';
+import { Toaster } from 'react-hot-toast';
+
+const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
   title: "Create Next App",
@@ -15,8 +19,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>
+      <body className={inter.className}>
         <WalletProviders>{children}</WalletProviders>
+        <Toaster position="bottom-right" />
       </body>
     </html>
   );

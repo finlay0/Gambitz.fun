@@ -79,7 +79,7 @@ describe("settle_flow", () => {
 
     // 3. Submit result (player one wins by mate)
     await program.methods
-      .submitResult(ResultType.Mate)
+      .submitResult({ mate: {} })
       .accounts({
         signer: playerOne.publicKey,
         matchAccount: matchPda,
