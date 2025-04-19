@@ -1,6 +1,7 @@
 {
   "private": true,
   "scripts": {
+    "anchor:install": "pnpm --filter ./contracts... exec npm install -g @coral-xyz/anchor@latest"
     "dev:web": "pnpm --filter ./web... dev",
     "dev:contracts": "pnpm --filter ./contracts... test",
     "test": "pnpm run dev:contracts && pnpm --filter ./web... lint"
