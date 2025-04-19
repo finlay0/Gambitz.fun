@@ -5,7 +5,7 @@ pub mod state;
 
 // Maximum stake amount per player in lamports
 pub const PLAYER_CAP: u64 = 1_000_000_000; // 1 SOL
-pub const CONFIRMATION_WINDOW: u64 = 30; // 10 seconds in slots
+pub const CONFIRMATION_WINDOW: u64 = 400; // 10 seconds in slots (40 slots per second)
 pub const PLATFORM_RAKE_PUBKEY: Pubkey = pubkey!("11111111111111111111111111111111"); // TODO: Replace with actual platform pubkey
 
 // Payout percentages (in basis points)
@@ -76,7 +76,16 @@ pub mod wager {
         match_account.stake_lamports = stake_lamports;
         match_account.is_settled = false;
         match_account.start_slot = Clock::get()?.slot;
+        match_account.last_move_slot = Clock::get()?.slot;
         match_account.winner = system_program::ID; // Initialize to system program (null) until settled
+        
+        // Initialize time controls (3 minutes = 180 seconds = 7200 slots)
+        match_account.player_one_time = 7200;
+        match_account.player_two_time = 7200;
+        match_account.is_player_one_turn = true;
+        match_account.is_game_over = false;
+        match_account.current_position = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".to_string();
+        match_account.move_history = Vec::new();
 
         // Emit challenge event
         emit!(Challenge {
@@ -103,11 +112,14 @@ pub mod wager {
             WagerError::MatchAlreadyConfirmed
         );
         
-        // Verify confirmation window
+        // Verify confirmation window (10 seconds)
         require!(
             current_slot <= match_account.start_slot + CONFIRMATION_WINDOW,
             WagerError::ConfirmationWindowExpired
         );
+
+        // Set start slot to current slot
+        match_account.start_slot = current_slot;
 
         // Transfer lamports from both players to match PDA
         system_program::transfer(
@@ -126,21 +138,17 @@ pub mod wager {
                 ctx.accounts.system_program.to_account_info(),
                 system_program::Transfer {
                     from: ctx.accounts.player_two.to_account_info(),
-                    to: match_info,
+                    to: match_info.clone(),
                 },
             ),
             stake,
         )?;
 
-        // Update match start slot to current slot
-        match_account.start_slot = current_slot;
-
-        // Emit confirmed event
         emit!(Confirmed {
-            player_one: match_account.player_one,
-            player_two: match_account.player_two,
+            player_one: ctx.accounts.player_one.key(),
+            player_two: ctx.accounts.player_two.key(),
             stake_lamports: stake,
-            match_pda: ctx.accounts.match_account.key(),
+            match_pda: match_info.key(),
         });
 
         Ok(())
@@ -232,6 +240,72 @@ pub mod wager {
         let match_account = &mut ctx.accounts.match_account;
         match_account.is_settled = true;
 
+        Ok(())
+    }
+
+    /// Makes a move in the chess game and updates time
+    pub fn make_move(
+        ctx: Context<MakeMove>,
+        move_san: String,
+    ) -> Result<()> {
+        let current_slot = Clock::get()?.slot;
+        let match_account = &mut ctx.accounts.match_account;
+        
+        // Verify game is not over
+        require!(
+            !match_account.is_game_over,
+            WagerError::GameAlreadyOver
+        );
+        
+        // Verify it's the player's turn
+        let is_player_one = ctx.accounts.signer.key() == match_account.player_one;
+        let is_player_two = ctx.accounts.signer.key() == match_account.player_two;
+        require!(
+            (is_player_one && match_account.is_player_one_turn) || 
+            (is_player_two && !match_account.is_player_one_turn),
+            WagerError::NotPlayersTurn
+        );
+        
+        // Calculate time elapsed since last move
+        let time_elapsed = current_slot.checked_sub(match_account.last_move_slot)
+            .ok_or(WagerError::TimeCalculationError)?;
+        
+        // Update time for the player who just moved
+        if is_player_one {
+            match_account.player_one_time = match_account.player_one_time
+                .checked_sub(time_elapsed)
+                .ok_or(WagerError::TimeCalculationError)?;
+        } else {
+            match_account.player_two_time = match_account.player_two_time
+                .checked_sub(time_elapsed)
+                .ok_or(WagerError::TimeCalculationError)?;
+        }
+        
+        // Check for timeout
+        if match_account.player_one_time == 0 || match_account.player_two_time == 0 {
+            match_account.is_game_over = true;
+            match_account.winner = if match_account.player_one_time == 0 {
+                match_account.player_two
+            } else {
+                match_account.player_one
+            };
+            
+            emit!(GameOver {
+                match_pda: ctx.accounts.match_account.key(),
+                result: ResultType::Timeout as u8,
+                winner: match_account.winner,
+            });
+            
+            return Ok(());
+        }
+        
+        // Update game state
+        match_account.last_move_slot = current_slot;
+        match_account.is_player_one_turn = !match_account.is_player_one_turn;
+        match_account.move_history.push(move_san);
+        
+        // TODO: Update current_position with new FEN
+        
         Ok(())
     }
 }
@@ -341,6 +415,24 @@ pub struct SettleMatch<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct MakeMove<'info> {
+    /// The player making the move
+    pub signer: Signer<'info>,
+    
+    /// The match account to update
+    #[account(
+        mut,
+        seeds = [
+            b"chessbets",
+            match_account.player_one.as_ref(),
+            match_account.player_two.as_ref(),
+        ],
+        bump,
+    )]
+    pub match_account: Account<'info, state::Match>,
+}
+
 #[error_code]
 pub enum WagerError {
     #[msg("Stake amount exceeds player cap")]
@@ -359,4 +451,10 @@ pub enum WagerError {
     InvalidSigner,
     #[msg("No winner has been declared yet")]
     NoWinnerYet,
+    #[msg("Game has already ended")]
+    GameAlreadyOver,
+    #[msg("Not the player's turn")]
+    NotPlayersTurn,
+    #[msg("Error calculating time")]
+    TimeCalculationError,
 }

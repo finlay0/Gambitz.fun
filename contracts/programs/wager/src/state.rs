@@ -21,6 +21,27 @@ pub struct Match {
     
     /// The slot number when the match started
     pub start_slot: u64,
+    
+    /// The slot number of the last move
+    pub last_move_slot: u64,
+    
+    /// Time remaining for player one in slots (40 slots per second)
+    pub player_one_time: u64,
+    
+    /// Time remaining for player two in slots (40 slots per second)
+    pub player_two_time: u64,
+    
+    /// Current player's turn (true for player one, false for player two)
+    pub is_player_one_turn: bool,
+    
+    /// Whether the game has ended
+    pub is_game_over: bool,
+    
+    /// The FEN string representing the current board position
+    pub current_position: String,
+    
+    /// The move history in SAN notation
+    pub move_history: Vec<String>,
 }
 
 /// Tracks a player's chess statistics and rating
