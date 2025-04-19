@@ -1,0 +1,15 @@
+{
+  "private": true,
+  "scripts": {
+    "dev:web": "pnpm --filter ./web... dev",
+    "dev:contracts": "pnpm --filter ./contracts... test",
+    "test": "pnpm run dev:contracts && pnpm --filter ./web... lint"
+  },
+  "pnpm": {
+    "overrides": {
+      "react": "18.2.0",
+      "react-dom": "18.2.0"
+    }
+  },
+  "packageManager": "pnpm@10.8.1"
+}

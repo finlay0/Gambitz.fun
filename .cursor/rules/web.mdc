@@ -1,0 +1,17 @@
+---
+description: 
+globs: web/**/*.ts, web/**/*.tsx
+alwaysApply: false
+---
+# WEB.rules
+
+• Prefer React‑Server Components (app router) when possible; mark Client Components explicitly.
+• No inline styles—use Tailwind classes exclusively.
+• Wallet flow: wrap `_app.tsx` with ConnectionProvider → WalletProvider → WalletModalProvider.
+• Never query RPCs directly inside components—fetch via hooks (SWR / tRPC).
+• Type all public keys as `PublicKey` (from `@solana/web3.js`), not `string`.
+• Pages ≤ 150 LOC; move heavy logic to hooks or utilities.
+• `pnpm lint && pnpm typecheck` must pass locally and in CI.
+
+Cursor Pattern Matches:
+web/**/*.ts, web/**/*.tsx, web/**/*.json, *.md
