@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 /// Represents a chess match between two players with associated stake and outcome information
 #[account]
-#[derive(Default, AnchorSerialize, AnchorDeserialize)]
+#[derive(Default)]
 pub struct Match {
     /// The public key of the first player who created the match
     pub player_one: Pubkey,
@@ -25,7 +25,7 @@ pub struct Match {
 
 /// Tracks a player's chess statistics and rating
 #[account]
-#[derive(Default, AnchorSerialize, AnchorDeserialize)]
+#[derive(Default)]
 pub struct PlayerStats {
     /// The player's ELO rating
     pub rating: i32,

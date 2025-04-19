@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_lang::system_program;
 
 pub mod state;
 
@@ -88,8 +89,13 @@ pub mod wager {
     }
 
     pub fn confirm_match(ctx: Context<ConfirmMatch>) -> Result<()> {
-        let match_account = &mut ctx.accounts.match_account;
         let current_slot = Clock::get()?.slot;
+        
+        // Store stake and match info before mutating
+        let match_info = ctx.accounts.match_account.to_account_info();
+        let stake = ctx.accounts.match_account.stake_lamports;
+        
+        let match_account = &mut ctx.accounts.match_account;
         
         // Verify match hasn't already been confirmed
         require!(
@@ -104,26 +110,26 @@ pub mod wager {
         );
 
         // Transfer lamports from both players to match PDA
-        anchor_lang::system_program::transfer(
+        system_program::transfer(
             CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
-                anchor_lang::system_program::Transfer {
+                system_program::Transfer {
                     from: ctx.accounts.player_one.to_account_info(),
-                    to: ctx.accounts.match_account.to_account_info(),
+                    to: match_info.clone(),
                 },
             ),
-            match_account.stake_lamports,
+            stake,
         )?;
 
-        anchor_lang::system_program::transfer(
+        system_program::transfer(
             CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
-                anchor_lang::system_program::Transfer {
+                system_program::Transfer {
                     from: ctx.accounts.player_two.to_account_info(),
-                    to: ctx.accounts.match_account.to_account_info(),
+                    to: match_info,
                 },
             ),
-            match_account.stake_lamports,
+            stake,
         )?;
 
         // Update match start slot to current slot
@@ -133,7 +139,7 @@ pub mod wager {
         emit!(Confirmed {
             player_one: match_account.player_one,
             player_two: match_account.player_two,
-            stake_lamports: match_account.stake_lamports,
+            stake_lamports: stake,
             match_pda: ctx.accounts.match_account.key(),
         });
 
