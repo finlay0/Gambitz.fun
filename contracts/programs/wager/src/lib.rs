@@ -249,6 +249,7 @@ pub mod wager {
         move_san: String,
     ) -> Result<()> {
         let current_slot = Clock::get()?.slot;
+        let match_pda = ctx.accounts.match_account.key();
         let match_account = &mut ctx.accounts.match_account;
         
         // Verify game is not over
@@ -291,7 +292,7 @@ pub mod wager {
             };
             
             emit!(GameOver {
-                match_pda: ctx.accounts.match_account.key(),
+                match_pda,
                 result: ResultType::Timeout as u8,
                 winner: match_account.winner,
             });

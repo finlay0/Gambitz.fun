@@ -306,10 +306,10 @@ export const PROGRAM_IDL = IDL;
  * ```
  */
 export type ResultVariant = {
-  mate?: {};
-  resign?: {};
-  timeout?: {};
-  disconnect?: {};
+  mate?: object;
+  resign?: object;
+  timeout?: object;
+  disconnect?: object;
 };
 
 /**
