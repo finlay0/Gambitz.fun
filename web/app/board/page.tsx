@@ -1,14 +1,12 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { WalletProviders } from '@/components/WalletProviders';
 import { useMatchmaker } from '@/hooks/useMatchmaker';
 import { useStakeSelector } from '@/hooks/useStakeSelector';
 import { Chessboard } from 'react-chessboard';
-import { useAnchorWallet, useConnection } from '@solana/wallet-adapter-react';
-import { Program, AnchorProvider } from '@coral-xyz/anchor';
-import { PublicKey, Transaction } from '@solana/web3.js';
-import { Wager, createResultVariant, PROGRAM_IDL } from '@/types/wager';
+import { useAnchorWallet } from '@solana/wallet-adapter-react';
+import { createResultVariant } from '@/types/wager';
 import { Chess } from 'chess.js';
 import { useChessTimer } from '@/hooks/useChessTimer';
 import { toast } from 'react-hot-toast';
@@ -73,7 +71,6 @@ const BoardPage = () => {
   const [stakeLamports] = useStakeSelector();
   const { state, matchPda, submitResult } = useMatchmaker(stakeLamports);
   const wallet = useAnchorWallet();
-  const { connection } = useConnection();
   const [game] = useState(() => new Chess());
   const [position, setPosition] = useState(game.fen());
   const [moves, setMoves] = useState<string[]>([]);
@@ -82,19 +79,6 @@ const BoardPage = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isResignDialogOpen, setIsResignDialogOpen] = useState(false);
   const [isGameOver, setIsGameOver] = useState(false);
-
-  // Initialize provider and program
-  const provider = useMemo(() => new AnchorProvider(
-    connection,
-    wallet as unknown as { publicKey: PublicKey; signTransaction: (tx: Transaction) => Promise<Transaction>; signAllTransactions: (txs: Transaction[]) => Promise<Transaction[]>; },
-    { commitment: 'confirmed' }
-  ), [connection, wallet]);
-
-  const program = useMemo(() => new Program<Wager>(
-    PROGRAM_IDL,
-    new PublicKey('GZJ54HYGi1Qx9GKeC9Ncbu2upkCwxGdrXxaQE9b2JVCM'),
-    provider
-  ), [provider]);
 
   // Start timers when game starts
   useEffect(() => {
