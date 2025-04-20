@@ -164,54 +164,56 @@ pub mod wager {
         result_type: ResultType,
     ) -> Result<()> {
         let match_account = &mut ctx.accounts.match_account;
+        let match_pda = match_account.key();
         
-        // Verify match hasn't been settled yet
+        // Verify game is not already over
         require!(
-            match_account.winner == system_program::ID,
-            WagerError::MatchAlreadySettled
+            !match_account.is_game_over,
+            WagerError::GameAlreadyOver
         );
         
         // Verify signer is one of the players
+        let is_player_one = ctx.accounts.signer.key() == match_account.player_one;
+        let is_player_two = ctx.accounts.signer.key() == match_account.player_two;
         require!(
-            ctx.accounts.signer.key() == match_account.player_one || 
-            ctx.accounts.signer.key() == match_account.player_two,
-            WagerError::InvalidSigner
+            is_player_one || is_player_two,
+            WagerError::NotPlayersTurn
         );
-
-        // Set winner to signer
+        
+        // Set game over and winner
+        match_account.is_game_over = true;
         match_account.winner = ctx.accounts.signer.key();
-
+        
         // Emit game over event
         emit!(GameOver {
-            match_pda: ctx.accounts.match_account.key(),
+            match_pda,
             result: result_type as u8,
-            winner: ctx.accounts.signer.key(),
+            winner: match_account.winner,
         });
-
+        
         Ok(())
     }
 
     pub fn settle_match(ctx: Context<SettleMatch>) -> Result<()> {
         let match_account = &ctx.accounts.match_account;
         
-        // Verify match hasn't been settled yet
+        // Verify game is over
+        require!(
+            match_account.is_game_over,
+            WagerError::GameNotOver
+        );
+        
+        // Verify match hasn't been settled
         require!(
             !match_account.is_settled,
             WagerError::MatchAlreadySettled
         );
         
-        // Verify match has a winner
-        require!(
-            match_account.winner != system_program::ID,
-            WagerError::NoWinnerYet
-        );
-
         // Calculate payouts
-        let total_stake = match_account.stake_lamports.checked_mul(2).unwrap(); // 2x because both players staked
+        let total_stake = match_account.stake_lamports.checked_mul(2).unwrap();
         let winner_payout = total_stake.checked_mul(WINNER_PCT).unwrap().checked_div(10000).unwrap();
         let platform_payout = total_stake.checked_mul(PLATFORM_PCT).unwrap().checked_div(10000).unwrap();
-        // Royalty amount stays in PDA
-
+        
         // Transfer to winner
         anchor_lang::system_program::transfer(
             CpiContext::new(
@@ -223,7 +225,7 @@ pub mod wager {
             ),
             winner_payout,
         )?;
-
+        
         // Transfer to platform
         anchor_lang::system_program::transfer(
             CpiContext::new(
@@ -235,21 +237,18 @@ pub mod wager {
             ),
             platform_payout,
         )?;
-
+        
         // Mark match as settled
         let match_account = &mut ctx.accounts.match_account;
         match_account.is_settled = true;
-
+        
         Ok(())
     }
 
-    /// Makes a move in the chess game and updates time
     pub fn make_move(
         ctx: Context<MakeMove>,
         move_san: String,
     ) -> Result<()> {
-        let current_slot = Clock::get()?.slot;
-        let match_pda = ctx.accounts.match_account.key();
         let match_account = &mut ctx.accounts.match_account;
         
         // Verify game is not over
@@ -267,45 +266,9 @@ pub mod wager {
             WagerError::NotPlayersTurn
         );
         
-        // Calculate time elapsed since last move
-        let time_elapsed = current_slot.checked_sub(match_account.last_move_slot)
-            .ok_or(WagerError::TimeCalculationError)?;
-        
-        // Update time for the player who just moved
-        if is_player_one {
-            match_account.player_one_time = match_account.player_one_time
-                .checked_sub(time_elapsed)
-                .ok_or(WagerError::TimeCalculationError)?;
-        } else {
-            match_account.player_two_time = match_account.player_two_time
-                .checked_sub(time_elapsed)
-                .ok_or(WagerError::TimeCalculationError)?;
-        }
-        
-        // Check for timeout
-        if match_account.player_one_time == 0 || match_account.player_two_time == 0 {
-            match_account.is_game_over = true;
-            match_account.winner = if match_account.player_one_time == 0 {
-                match_account.player_two
-            } else {
-                match_account.player_one
-            };
-            
-            emit!(GameOver {
-                match_pda,
-                result: ResultType::Timeout as u8,
-                winner: match_account.winner,
-            });
-            
-            return Ok(());
-        }
-        
-        // Update game state
-        match_account.last_move_slot = current_slot;
-        match_account.is_player_one_turn = !match_account.is_player_one_turn;
+        // Simply store the move and update turn
         match_account.move_history.push(move_san);
-        
-        // TODO: Update current_position with new FEN
+        match_account.is_player_one_turn = !match_account.is_player_one_turn;
         
         Ok(())
     }
@@ -458,4 +421,10 @@ pub enum WagerError {
     NotPlayersTurn,
     #[msg("Error calculating time")]
     TimeCalculationError,
+    #[msg("Invalid FEN string")]
+    InvalidFen,
+    #[msg("Ambiguous move - multiple pieces can make this move")]
+    AmbiguousMove,
+    #[msg("Game is not over yet")]
+    GameNotOver,
 }
