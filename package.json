@@ -4,7 +4,8 @@
     "anchor:install": "pnpm --filter ./contracts... exec npm install -g @coral-xyz/anchor@latest",
     "dev:web": "pnpm --filter ./web... dev",
     "dev:contracts": "pnpm --filter ./contracts... test",
-    "test": "pnpm run dev:contracts && pnpm --filter ./web... lint"
+    "test": "pnpm run dev:contracts && pnpm --filter ./web... lint",
+    "prepare": "husky install"
   },
   "pnpm": {
     "overrides": {
@@ -12,5 +13,9 @@
       "react-dom": "18.2.0"
     }
   },
-  "packageManager": "pnpm@10.8.1"
+  "packageManager": "pnpm@10.8.1",
+  "devDependencies": {
+    "husky": "^8.0.0",
+    "lint-staged": "^15.5.1"
+  }
 }
