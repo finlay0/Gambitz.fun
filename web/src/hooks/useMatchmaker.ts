@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import { Program, AnchorProvider, web3, Idl, BN } from '@coral-xyz/anchor';
-import { Wager, ResultVariant, PROGRAM_IDL } from '@/types/wager';
+import { Program, AnchorProvider, web3, BN } from '@coral-xyz/anchor';
+import { ResultVariant, PROGRAM_IDL } from '@/types/wager';
 
 const WS_URL = 'wss://api.chessbets.fun/ws';
 const MAX_RECONNECT_ATTEMPTS = 5;

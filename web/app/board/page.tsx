@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { WalletProviders } from '@/components/WalletProviders';
 import { useMatchmaker } from '@/hooks/useMatchmaker';
 import { useStakeSelector } from '@/hooks/useStakeSelector';
 import { Chessboard } from 'react-chessboard';
-import { useAnchorWallet, useConnection, useWallet } from '@solana/wallet-adapter-react';
-import { Program, AnchorProvider, web3, BN, Idl } from '@coral-xyz/anchor';
-import { PublicKey } from '@solana/web3.js';
+import { useAnchorWallet, useConnection } from '@solana/wallet-adapter-react';
+import { Program, AnchorProvider } from '@coral-xyz/anchor';
+import { PublicKey, Transaction } from '@solana/web3.js';
 import { Wager, createResultVariant, PROGRAM_IDL } from '@/types/wager';
 import { Chess } from 'chess.js';
 import { useChessTimer } from '@/hooks/useChessTimer';
@@ -83,17 +83,17 @@ const BoardPage = () => {
   const [isResignDialogOpen, setIsResignDialogOpen] = useState(false);
 
   // Initialize provider and program
-  const provider = new AnchorProvider(
+  const provider = useMemo(() => new AnchorProvider(
     connection,
-    wallet as any,
+    wallet as unknown as { publicKey: PublicKey; signTransaction: (tx: Transaction) => Promise<Transaction>; signAllTransactions: (txs: Transaction[]) => Promise<Transaction[]>; },
     { commitment: 'confirmed' }
-  );
+  ), [connection, wallet]);
 
-  const program = new Program<Wager>(
+  const program = useMemo(() => new Program<Wager>(
     PROGRAM_IDL,
     new PublicKey('GZJ54HYGi1Qx9GKeC9Ncbu2upkCwxGdrXxaQE9b2JVCM'),
     provider
-  );
+  ), [provider]);
 
   // Start timers when game starts
   useEffect(() => {
@@ -102,7 +102,7 @@ const BoardPage = () => {
     }
   }, [state, startTimers]);
 
-  const getErrorMessage = (error: any, variant: string): string => {
+  const getErrorMessage = (error: Error, variant: string): string => {
     if (error.message?.includes('insufficient funds')) {
       return 'Insufficient funds to submit result';
     } else if (error.message?.includes('not authorized')) {
@@ -118,7 +118,7 @@ const BoardPage = () => {
     }
   };
 
-  const handleResultSubmission = async (variant: 'mate' | 'resign' | 'timeout' | 'disconnect') => {
+  const handleResultSubmission = useCallback(async (variant: 'mate' | 'resign' | 'timeout' | 'disconnect') => {
     if (!matchPda || !wallet) {
       toast.error('Wallet not connected or match not found');
       return;
@@ -138,18 +138,18 @@ const BoardPage = () => {
       toast.success(`Game ended: ${variant}`);
     } catch (error) {
       console.error('Failed to submit result:', error);
-      const errorMessage = getErrorMessage(error, variant);
+      const errorMessage = getErrorMessage(error as Error, variant);
       toast.error(errorMessage);
     } finally {
       setIsSubmitting(false);
       setIsResignDialogOpen(false);
     }
-  };
+  }, [matchPda, wallet, program, stopTimers]);
 
-  const handleResign = () => setIsResignDialogOpen(true);
-  const handleCheckmate = () => handleResultSubmission('mate');
-  const handleTimeout = () => handleResultSubmission('timeout');
-  const handleDisconnect = () => handleResultSubmission('disconnect');
+  const handleResign = useCallback(() => setIsResignDialogOpen(true), []);
+  const handleCheckmate = useCallback(() => handleResultSubmission('mate'), [handleResultSubmission]);
+  const handleTimeout = useCallback(() => handleResultSubmission('timeout'), [handleResultSubmission]);
+  const handleDisconnect = useCallback(() => handleResultSubmission('disconnect'), [handleResultSubmission]);
 
   // Add timeout check in the timer effect
   useEffect(() => {
@@ -165,7 +165,7 @@ const BoardPage = () => {
       const interval = setInterval(checkTimeout, 1000);
       return () => clearInterval(interval);
     }
-  }, [state, timers.white, timers.black]);
+  }, [state, timers.white, timers.black, handleTimeout]);
 
   // Add disconnect handling
   useEffect(() => {
@@ -177,7 +177,7 @@ const BoardPage = () => {
 
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [state, isSubmitting]);
+  }, [state, isSubmitting, handleDisconnect]);
 
   const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
     const move = game.move({

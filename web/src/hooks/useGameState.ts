@@ -80,7 +80,7 @@ export function useGameState() {
 
     const subscriptionId = connection.onAccountChange(
       matchPda,
-      (accountInfo) => {
+      () => {
         // TODO: Parse account data and dispatch appropriate actions
         // This will require implementing the account data parsing logic
       },

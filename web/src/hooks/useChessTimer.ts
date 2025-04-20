@@ -1,5 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
-import { Chess } from 'chess.js';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface TimerState {
   white: number;
@@ -7,50 +6,36 @@ interface TimerState {
   active: 'white' | 'black';
 }
 
-interface TimerControls {
-  timers: TimerState;
-  startTimers: () => void;
-  stopTimers: () => void;
-  switchActiveTimer: () => void;
-}
-
-const INITIAL_TIME = 3 * 60; // 3 minutes in seconds
+const INITIAL_TIME = 180; // 3 minutes in seconds
 const INCREMENT = 2; // 2 seconds added per move
 
-export const useChessTimer = (game: Chess): TimerControls => {
+export function useChessTimer() {
   const [timers, setTimers] = useState<TimerState>({
     white: INITIAL_TIME,
     black: INITIAL_TIME,
-    active: 'white'
+    active: 'white',
   });
-  const [isRunning, setIsRunning] = useState(false);
+  const intervalRef = useRef<NodeJS.Timeout>();
 
-  // Update active timer every second
-  useEffect(() => {
-    if (!isRunning) return;
+  const startTimers = useCallback(() => {
+    if (intervalRef.current) return;
 
-    const interval = setInterval(() => {
+    intervalRef.current = setInterval(() => {
       setTimers(prev => {
-        if (prev[prev.active] <= 0) {
-          setIsRunning(false);
-          return prev;
-        }
+        if (prev[prev.active] <= 0) return prev;
         return {
           ...prev,
-          [prev.active]: prev[prev.active] - 1
+          [prev.active]: prev[prev.active] - 1,
         };
       });
     }, 1000);
-
-    return () => clearInterval(interval);
-  }, [isRunning]);
-
-  const startTimers = useCallback(() => {
-    setIsRunning(true);
   }, []);
 
   const stopTimers = useCallback(() => {
-    setIsRunning(false);
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = undefined;
+    }
   }, []);
 
   const switchActiveTimer = useCallback(() => {
@@ -60,15 +45,23 @@ export const useChessTimer = (game: Chess): TimerControls => {
       return {
         ...prev,
         [prev.active]: currentTime + INCREMENT,
-        active: prev.active === 'white' ? 'black' : 'white'
+        active: prev.active === 'white' ? 'black' : 'white',
       };
     });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+    };
   }, []);
 
   return {
     timers,
     startTimers,
     stopTimers,
-    switchActiveTimer
+    switchActiveTimer,
   };
-}; 
+} 
