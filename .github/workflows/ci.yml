@@ -37,7 +37,7 @@ jobs:
         run: pnpm install
 
       - name: Test web build
-        run: pnpm --filter ./web... dev --dry-run
+        run: pnpm --filter ./web next build
 
       - name: Test contracts
         run: cargo test --manifest-path contracts/Cargo.toml 
