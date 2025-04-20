@@ -71,16 +71,17 @@ const MoveHistory = ({ moves, currentMove, onMoveClick }: MoveHistoryProps) => {
 
 const BoardPage = () => {
   const [stakeLamports] = useStakeSelector();
-  const { state, matchPda } = useMatchmaker(stakeLamports);
+  const { state, matchPda, submitResult } = useMatchmaker(stakeLamports);
   const wallet = useAnchorWallet();
   const { connection } = useConnection();
   const [game] = useState(() => new Chess());
   const [position, setPosition] = useState(game.fen());
   const [moves, setMoves] = useState<string[]>([]);
   const [currentMove, setCurrentMove] = useState(-1);
-  const { timers, startTimers, stopTimers, switchActiveTimer } = useChessTimer(game);
+  const { timers, startTimers, stopTimers, switchActiveTimer } = useChessTimer();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isResignDialogOpen, setIsResignDialogOpen] = useState(false);
+  const [isGameOver, setIsGameOver] = useState(false);
 
   // Initialize provider and program
   const provider = useMemo(() => new AnchorProvider(
@@ -97,10 +98,10 @@ const BoardPage = () => {
 
   // Start timers when game starts
   useEffect(() => {
-    if (state === 'matched') {
+    if (state === 'matched' && !isGameOver) {
       startTimers();
     }
-  }, [state, startTimers]);
+  }, [state, startTimers, isGameOver]);
 
   const getErrorMessage = (error: Error, variant: string): string => {
     if (error.message?.includes('insufficient funds')) {
@@ -126,15 +127,9 @@ const BoardPage = () => {
 
     setIsSubmitting(true);
     try {
-      await program.methods
-        .submitResult(createResultVariant(variant))
-        .accounts({
-          signer: wallet.publicKey,
-          matchAccount: matchPda,
-        })
-        .rpc();
-      
+      await submitResult(createResultVariant(variant));
       stopTimers();
+      setIsGameOver(true);
       toast.success(`Game ended: ${variant}`);
     } catch (error) {
       console.error('Failed to submit result:', error);
@@ -144,7 +139,7 @@ const BoardPage = () => {
       setIsSubmitting(false);
       setIsResignDialogOpen(false);
     }
-  }, [matchPda, wallet, program, stopTimers]);
+  }, [matchPda, wallet, submitResult, stopTimers]);
 
   const handleResign = useCallback(() => setIsResignDialogOpen(true), []);
   const handleCheckmate = useCallback(() => handleResultSubmission('mate'), [handleResultSubmission]);
@@ -153,7 +148,7 @@ const BoardPage = () => {
 
   // Add timeout check in the timer effect
   useEffect(() => {
-    if (state === 'matched') {
+    if (state === 'matched' && !isGameOver) {
       const checkTimeout = () => {
         if (timers.white <= 0) {
           handleTimeout();
@@ -165,44 +160,65 @@ const BoardPage = () => {
       const interval = setInterval(checkTimeout, 1000);
       return () => clearInterval(interval);
     }
-  }, [state, timers.white, timers.black, handleTimeout]);
+  }, [state, timers.white, timers.black, handleTimeout, isGameOver]);
 
   // Add disconnect handling
   useEffect(() => {
     const handleBeforeUnload = () => {
-      if (state === 'matched' && !isSubmitting) {
+      if (state === 'matched' && !isSubmitting && !isGameOver) {
         handleDisconnect();
       }
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [state, isSubmitting, handleDisconnect]);
+  }, [state, isSubmitting, handleDisconnect, isGameOver]);
 
   const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
-    const move = game.move({
-      from: sourceSquare,
-      to: targetSquare,
-      promotion: 'q' // Always promote to queen for simplicity
-    });
+    if (isGameOver) return false;
 
-    if (move) {
-      setPosition(game.fen());
-      setMoves(prev => [...prev, move.san]);
-      setCurrentMove(moves.length);
-      switchActiveTimer();
+    try {
+      const move = game.move({
+        from: sourceSquare,
+        to: targetSquare,
+        promotion: 'q' // Always promote to queen for simplicity
+      });
 
-      // Check for checkmate after the move
-      if (game.isCheckmate()) {
-        handleCheckmate();
+      if (move) {
+        setPosition(game.fen());
+        setMoves(prev => [...prev, move.san]);
+        setCurrentMove(moves.length);
+        switchActiveTimer();
+
+        // Check for game end conditions
+        if (game.isCheckmate()) {
+          handleCheckmate();
+        } else if (game.isDraw()) {
+          // Handle draw conditions
+          if (game.isStalemate()) {
+            toast.info('Game ended in stalemate');
+          } else if (game.isThreefoldRepetition()) {
+            toast.info('Game ended in threefold repetition');
+          } else if (game.isInsufficientMaterial()) {
+            toast.info('Game ended due to insufficient material');
+          } else if (game.isDraw()) {
+            toast.info('Game ended in a draw');
+          }
+          setIsGameOver(true);
+          stopTimers();
+        }
+
+        return true;
       }
-
-      return true;
+    } catch (error) {
+      console.error('Invalid move:', error);
     }
     return false;
   };
 
   const handleMoveClick = (moveIndex: number) => {
+    if (isGameOver) return;
+
     // Create a new game instance and replay moves up to the clicked move
     const tempGame = new Chess();
     for (let i = 0; i <= moveIndex; i++) {
@@ -213,6 +229,8 @@ const BoardPage = () => {
   };
 
   const returnToCurrentPosition = () => {
+    if (isGameOver) return;
+
     // Replay all moves to get to the current position
     const tempGame = new Chess();
     for (const move of moves) {
@@ -250,74 +268,78 @@ const BoardPage = () => {
           </div>
         </div>
 
-        <div className="flex space-x-4">
-          <div className="bg-white rounded-lg shadow-lg p-4">
-            <Chessboard
-              position={position}
-              onPieceDrop={onPieceDrop}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="md:col-span-2">
+            <div className="bg-white rounded-lg shadow p-4">
+              <Chessboard
+                position={position}
+                onPieceDrop={onPieceDrop}
+                boardWidth={600}
+                arePiecesDraggable={!isGameOver}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <MoveHistory
+              moves={moves}
+              currentMove={currentMove}
+              onMoveClick={handleMoveClick}
             />
-          </div>
-          <MoveHistory 
-            moves={moves} 
-            currentMove={currentMove}
-            onMoveClick={handleMoveClick}
-          />
-          <div className="mt-4">
-            <button
-              onClick={returnToCurrentPosition}
-              className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded"
-            >
-              Return to Current Position
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-4 flex justify-end space-x-4">
-          <button
-            onClick={handleResign}
-            disabled={isSubmitting}
-            className="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isSubmitting ? 'Submitting...' : 'Resign'}
-          </button>
-        </div>
-
-        {/* Resign Confirmation Dialog */}
-        <Dialog
-          open={isResignDialogOpen}
-          onClose={() => setIsResignDialogOpen(false)}
-          className="relative z-50"
-        >
-          <div className="fixed inset-0 bg-black/30" aria-hidden="true" />
-          
-          <div className="fixed inset-0 flex items-center justify-center p-4">
-            <Dialog.Panel className="mx-auto max-w-sm rounded bg-white p-6">
-              <Dialog.Title className="text-lg font-medium text-gray-900">
-                Confirm Resignation
-              </Dialog.Title>
-              <Dialog.Description className="mt-2 text-sm text-gray-500">
-                Are you sure you want to resign? This action cannot be undone.
-              </Dialog.Description>
-
-              <div className="mt-4 flex justify-end space-x-3">
+            <div className="bg-white rounded-lg shadow p-4">
+              <div className="space-y-2">
                 <button
-                  onClick={() => setIsResignDialogOpen(false)}
-                  className="rounded-md bg-gray-100 px-4 py-2 text-sm font-medium text-gray-900 hover:bg-gray-200"
+                  onClick={returnToCurrentPosition}
+                  disabled={isGameOver}
+                  className="w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600 disabled:bg-gray-300"
                 >
-                  Cancel
+                  Return to Current Position
                 </button>
                 <button
-                  onClick={() => handleResultSubmission('resign')}
-                  disabled={isSubmitting}
-                  className="rounded-md bg-red-500 px-4 py-2 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={handleResign}
+                  disabled={isGameOver}
+                  className="w-full bg-red-500 text-white py-2 rounded hover:bg-red-600 disabled:bg-gray-300"
                 >
-                  {isSubmitting ? 'Submitting...' : 'Confirm Resign'}
+                  Resign
                 </button>
               </div>
-            </Dialog.Panel>
+            </div>
           </div>
-        </Dialog>
+        </div>
       </div>
+
+      <Dialog
+        open={isResignDialogOpen}
+        onClose={() => setIsResignDialogOpen(false)}
+        className="fixed inset-0 z-10 overflow-y-auto"
+      >
+        <div className="flex items-center justify-center min-h-screen">
+          <Dialog.Overlay className="fixed inset-0 bg-black opacity-30" />
+          <div className="bg-white rounded-lg p-6 max-w-sm mx-auto z-10">
+            <Dialog.Title className="text-lg font-medium mb-4">
+              Confirm Resignation
+            </Dialog.Title>
+            <p className="text-gray-600 mb-4">
+              Are you sure you want to resign? This will end the game and your opponent will win.
+            </p>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setIsResignDialogOpen(false)}
+                className="px-4 py-2 text-gray-600 hover:text-gray-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleResultSubmission('resign')}
+                disabled={isSubmitting}
+                className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 disabled:bg-gray-300"
+              >
+                {isSubmitting ? 'Submitting...' : 'Resign'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Dialog>
     </div>
   );
 };
