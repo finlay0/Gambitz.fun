@@ -1,6 +1,6 @@
 # chessbets.fun
 
-A real-money PvP chess arena built on Solana. Stake SOL. Win's payout instantly. Defend your honor with AI-powered cheat detection and zero-knowledge proofs.
+A real-money PvP chess arena built on Solana. Stake SOL. Compete for real rewards. Defend your honor with AI-powered cheat detection and zero-knowledge proofs.
 
 ## Overview
 
