@@ -4,4 +4,4 @@ pnpm-lock.yaml
 
 .env
 .env.local
-.env.*
+.env.*.cursor/rules
