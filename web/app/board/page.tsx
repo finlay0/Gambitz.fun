@@ -36,16 +36,16 @@ const MoveHistory = ({ moves, currentMove, onMoveClick }: MoveHistoryProps) => {
   }
 
   return (
-    <div className="bg-white rounded-lg shadow p-4 h-[600px] overflow-y-auto">
-      <div className="font-bold mb-2">Move History</div>
+    <div className="bg-border rounded-lg p-4 h-[400px] overflow-y-auto text-white w-full max-w-xs mx-auto">
+      <div className="font-bold mb-2 text-accent">Move History</div>
       <div className="space-y-1">
         {pairs.map((pair, index) => (
           <div key={index} className="flex items-center space-x-2">
-            <span className="text-gray-500 w-8">{index + 1}.</span>
+            <span className="text-gray-400 w-8">{index + 1}.</span>
             <button
               onClick={() => onMoveClick(pair.whiteIndex)}
-              className={`w-20 text-left hover:bg-gray-100 p-1 rounded ${
-                currentMove === pair.whiteIndex ? 'bg-blue-100' : ''
+              className={`w-20 text-left hover:bg-neutral p-1 rounded transition-colors duration-100 ${
+                currentMove === pair.whiteIndex ? 'bg-primary/30' : ''
               }`}
             >
               {pair.white}
@@ -53,8 +53,8 @@ const MoveHistory = ({ moves, currentMove, onMoveClick }: MoveHistoryProps) => {
             {pair.black && (
               <button
                 onClick={() => onMoveClick(pair.blackIndex)}
-                className={`w-20 text-left hover:bg-gray-100 p-1 rounded ${
-                  currentMove === pair.blackIndex ? 'bg-blue-100' : ''
+                className={`w-20 text-left hover:bg-neutral p-1 rounded transition-colors duration-100 ${
+                  currentMove === pair.blackIndex ? 'bg-primary/30' : ''
                 }`}
               >
                 {pair.black}
@@ -180,13 +180,37 @@ const BoardPage = () => {
         } else if (game.isDraw()) {
           // Handle draw conditions
           if (game.isStalemate()) {
-            toast.info('Game ended in stalemate');
+            toast('Game ended in stalemate', { 
+              icon: 'ℹ️',
+              style: {
+                background: '#3B82F6',
+                color: '#fff',
+              }
+            });
           } else if (game.isThreefoldRepetition()) {
-            toast.info('Game ended in threefold repetition');
+            toast('Game ended in threefold repetition', { 
+              icon: 'ℹ️',
+              style: {
+                background: '#3B82F6',
+                color: '#fff',
+              }
+            });
           } else if (game.isInsufficientMaterial()) {
-            toast.info('Game ended due to insufficient material');
+            toast('Game ended due to insufficient material', { 
+              icon: 'ℹ️',
+              style: {
+                background: '#3B82F6',
+                color: '#fff',
+              }
+            });
           } else if (game.isDraw()) {
-            toast.info('Game ended in a draw');
+            toast('Game ended in a draw', { 
+              icon: 'ℹ️',
+              style: {
+                background: '#3B82F6',
+                color: '#fff',
+              }
+            });
           }
           setIsGameOver(true);
           stopTimers();
@@ -226,9 +250,9 @@ const BoardPage = () => {
 
   if (state === 'searching') {
     return (
-      <div className="flex items-center justify-center min-h-screen">
+      <div className="flex items-center justify-center min-h-screen bg-background text-white">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900 mx-auto"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
           <p className="mt-4 text-lg">Searching for opponent...</p>
         </div>
       </div>
@@ -236,87 +260,83 @@ const BoardPage = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 p-4">
-      <div className="max-w-6xl mx-auto">
-        <div className="flex justify-between items-center mb-4">
-          <div className="text-2xl font-bold">Chess Game</div>
-          <div className="flex space-x-4">
-            <div className={`bg-white p-2 rounded shadow ${timers.active === 'white' ? 'ring-2 ring-blue-500' : ''}`}>
-              <div className="text-sm text-gray-500">White</div>
-              <div className="text-xl font-mono">{formatTime(timers.white)}</div>
+    <div className="min-h-screen flex flex-col items-center justify-center bg-background text-white py-8 px-2">
+      <div className="w-full max-w-5xl flex flex-col md:flex-row gap-8 items-center justify-center">
+        {/* Board + Timers */}
+        <div className="flex flex-col items-center w-full max-w-[500px] mx-auto">
+          {/* Timers */}
+          <div className="flex justify-between w-full mb-4 gap-4">
+            <div className={`flex-1 flex flex-col items-center bg-border rounded-lg px-4 py-2 ${timers.active === 'white' ? 'ring-2 ring-primary' : ''}`}>
+              <div className="text-xs text-gray-300">White</div>
+              <div className="text-2xl font-mono">{formatTime(timers.white)}</div>
             </div>
-            <div className={`bg-white p-2 rounded shadow ${timers.active === 'black' ? 'ring-2 ring-blue-500' : ''}`}>
-              <div className="text-sm text-gray-500">Black</div>
-              <div className="text-xl font-mono">{formatTime(timers.black)}</div>
+            <div className={`flex-1 flex flex-col items-center bg-border rounded-lg px-4 py-2 ${timers.active === 'black' ? 'ring-2 ring-primary' : ''}`}>
+              <div className="text-xs text-gray-300">Black</div>
+              <div className="text-2xl font-mono">{formatTime(timers.black)}</div>
             </div>
+          </div>
+          {/* Chessboard */}
+          <div className="w-full max-w-[500px] mx-auto bg-neutral rounded-xl shadow-lg p-2">
+            <Chessboard
+              position={position}
+              onPieceDrop={onPieceDrop}
+              boardWidth={400}
+              arePiecesDraggable={!isGameOver}
+            />
+          </div>
+          {/* Board controls */}
+          <div className="flex w-full gap-2 mt-4">
+            <button
+              onClick={returnToCurrentPosition}
+              disabled={isGameOver}
+              className="flex-1 bg-primary text-white py-2 rounded hover:bg-primary/80 disabled:bg-gray-700 transition-colors"
+            >
+              Return to Current Position
+            </button>
+            <button
+              onClick={handleResign}
+              disabled={isGameOver}
+              className="flex-1 bg-red-500 text-white py-2 rounded hover:bg-red-600 disabled:bg-gray-700 transition-colors"
+            >
+              Resign
+            </button>
           </div>
         </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="md:col-span-2">
-            <div className="bg-white rounded-lg shadow p-4">
-              <Chessboard
-                position={position}
-                onPieceDrop={onPieceDrop}
-                boardWidth={600}
-                arePiecesDraggable={!isGameOver}
-              />
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            <MoveHistory
-              moves={moves}
-              currentMove={currentMove}
-              onMoveClick={handleMoveClick}
-            />
-            <div className="bg-white rounded-lg shadow p-4">
-              <div className="space-y-2">
-                <button
-                  onClick={returnToCurrentPosition}
-                  disabled={isGameOver}
-                  className="w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600 disabled:bg-gray-300"
-                >
-                  Return to Current Position
-                </button>
-                <button
-                  onClick={handleResign}
-                  disabled={isGameOver}
-                  className="w-full bg-red-500 text-white py-2 rounded hover:bg-red-600 disabled:bg-gray-300"
-                >
-                  Resign
-                </button>
-              </div>
-            </div>
-          </div>
+        {/* Move History */}
+        <div className="w-full md:w-[300px] flex flex-col items-center">
+          <MoveHistory
+            moves={moves}
+            currentMove={currentMove}
+            onMoveClick={handleMoveClick}
+          />
         </div>
       </div>
-
+      {/* Resign Dialog */}
       <Dialog
         open={isResignDialogOpen}
         onClose={() => setIsResignDialogOpen(false)}
         className="fixed inset-0 z-10 overflow-y-auto"
       >
         <div className="flex items-center justify-center min-h-screen">
-          <Dialog.Overlay className="fixed inset-0 bg-black opacity-30" />
-          <div className="bg-white rounded-lg p-6 max-w-sm mx-auto z-10">
+          <div className="fixed inset-0 bg-black/30" aria-hidden="true" />
+          <div className="bg-neutral rounded-lg p-6 max-w-sm mx-auto z-10 text-white">
             <Dialog.Title className="text-lg font-medium mb-4">
               Confirm Resignation
             </Dialog.Title>
-            <p className="text-gray-600 mb-4">
+            <p className="text-gray-300 mb-4">
               Are you sure you want to resign? This will end the game and your opponent will win.
             </p>
             <div className="flex justify-end space-x-3">
               <button
                 onClick={() => setIsResignDialogOpen(false)}
-                className="px-4 py-2 text-gray-600 hover:text-gray-800"
+                className="px-4 py-2 text-gray-300 hover:text-white"
               >
                 Cancel
               </button>
               <button
                 onClick={() => handleResultSubmission('resign')}
                 disabled={isSubmitting}
-                className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 disabled:bg-gray-300"
+                className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 disabled:bg-gray-700"
               >
                 {isSubmitting ? 'Submitting...' : 'Resign'}
               </button>

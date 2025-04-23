@@ -15,7 +15,19 @@
   },
   "packageManager": "pnpm@10.8.1",
   "devDependencies": {
+    "@metaplex-foundation/js": "^0.20.1",
+    "@metaplex-foundation/mpl-bubblegum": "^4.4.0",
+    "@solana/web3.js": "^1.98.0",
+    "@types/node": "^20.17.30",
     "husky": "^8.0.0",
-    "lint-staged": "^15.5.1"
+    "lint-staged": "^15.5.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@metaplex-foundation/umi": "^1.2.0",
+    "@metaplex-foundation/umi-bundle-defaults": "^1.2.0",
+    "@metaplex-foundation/umi-signer-wallet-adapters": "^1.2.0",
+    "@metaplex-foundation/umi-web3js-adapters": "^1.2.0"
   }
 }
