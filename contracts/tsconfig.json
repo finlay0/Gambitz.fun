@@ -5,6 +5,25 @@
     "lib": ["es2015"],
     "module": "commonjs",
     "target": "es6",
-    "esModuleInterop": true
-  }
+    "esModuleInterop": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"],
+      "@/tests/*": ["tests/*"],
+      "@/programs/*": ["programs/*"],
+      "@/migrations/*": ["migrations/*"]
+    },
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": [
+    "**/*.ts",
+    "tests/**/*.ts",
+    "programs/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "target"
+  ]
 }

@@ -36,6 +36,12 @@
       ],
       "@/idl/*": [
         "src/idl/*"
+      ],
+      "@/utils/*": [
+        "src/utils/*"
+      ],
+      "@/constants/*": [
+        "src/constants/*"
       ]
     },
     "allowSyntheticDefaultImports": true
