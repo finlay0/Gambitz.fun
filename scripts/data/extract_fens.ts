@@ -376,13 +376,15 @@ function decompressWithSystemZstd(inputFile: string, outputFile: string): boolea
 }
 
 // Function to decompress large files by using zstdcat and pipe to output
-function decompressWithZstdCat(inputFile: string, outputFile: string): Promise<boolean> {
+function decompressWithZstdCat(inputFile: string, outputFile: string, maxBytes = 100 * 1024 * 1024): Promise<boolean> {
   return new Promise((resolve) => {
-    console.log(`Decompressing ${inputFile} using zstdcat pipe...`);
+    console.log(`Decompressing first ${maxBytes / (1024 * 1024)}MB from ${inputFile} using zstdcat pipe...`);
     
     try {
       // Spawn zstdcat process to decompress to stdout
       const zstdCat = spawn('zstdcat', ['--no-check', inputFile]);
+      // Use head to limit the output size (to avoid processing the whole file which could be huge)
+      const head = spawn('head', ['-c', maxBytes.toString()]);
       
       // Create write stream for output file
       const outputStream = fs.createWriteStream(outputFile);
@@ -390,17 +392,26 @@ function decompressWithZstdCat(inputFile: string, outputFile: string): Promise<b
       // Track if we've received any data
       let receivedData = false;
       
-      // Pipe decompressed data to output file
-      zstdCat.stdout.pipe(outputStream);
+      // Pipe decompressed data through head and to output file
+      zstdCat.stdout.pipe(head.stdin);
+      head.stdout.pipe(outputStream);
       
       // Check if we're getting data
-      zstdCat.stdout.on('data', (chunk) => {
+      head.stdout.on('data', (chunk) => {
         receivedData = true;
       });
       
       // Handle errors
       zstdCat.on('error', (err) => {
         console.error('zstdcat error:', err);
+        head.kill();
+        outputStream.end();
+        resolve(false);
+      });
+      
+      head.on('error', (err) => {
+        console.error('head error:', err);
+        zstdCat.kill();
         outputStream.end();
         resolve(false);
       });
@@ -408,6 +419,7 @@ function decompressWithZstdCat(inputFile: string, outputFile: string): Promise<b
       outputStream.on('error', (err) => {
         console.error('Output stream error:', err);
         zstdCat.kill();
+        head.kill();
         resolve(false);
       });
       
@@ -419,7 +431,7 @@ function decompressWithZstdCat(inputFile: string, outputFile: string): Promise<b
           fileSizeBytes = stats.size;
           
           if (fileSizeBytes > 0) {
-            console.log(`Decompression successful: ${(fileSizeBytes / (1024 * 1024 * 1024)).toFixed(2)} GB`);
+            console.log(`Partial decompression successful: ${(fileSizeBytes / (1024 * 1024)).toFixed(2)} MB`);
             resolve(true);
           } else {
             console.error('Decompression created an empty file');
@@ -431,7 +443,7 @@ function decompressWithZstdCat(inputFile: string, outputFile: string): Promise<b
         }
       });
       
-      // Handle zstdcat process exit
+      // Handle process exits
       zstdCat.on('exit', (code) => {
         if (code !== 0) {
           // For corrupted zstd files, exit code 1 is common
@@ -441,7 +453,12 @@ function decompressWithZstdCat(inputFile: string, outputFile: string): Promise<b
           } else {
             console.warn(`zstdcat exited with code ${code}`);
           }
-          // Let the outputStream.finish handler determine success
+        }
+      });
+      
+      head.on('exit', (code) => {
+        if (code !== 0) {
+          console.warn(`head process exited with code ${code}`);
         }
       });
     } catch (error) {
@@ -600,21 +617,15 @@ async function main() {
       console.log('Falling back to sample data generation...');
       await createSampleData(writer);
     } else {
-      // Try to decompress the file using system zstd
+      // Try to decompress the file
       let decompressed = false;
       
-      // Try direct decompression first
-      decompressed = decompressWithSystemZstd(INPUT_FILE, TEMP_DECOMPRESSED_FILE);
-      
-      // If direct decompression fails, try using zstdcat pipe approach
-      if (!decompressed) {
-        console.log('Direct decompression failed, trying zstdcat pipe method...');
-        decompressed = await decompressWithZstdCat(INPUT_FILE, TEMP_DECOMPRESSED_FILE);
-      }
+      // Use zstdcat to extract just a portion (100MB) for faster processing
+      console.log('Using zstdcat to extract a portion of the file for processing...');
+      decompressed = await decompressWithZstdCat(INPUT_FILE, TEMP_DECOMPRESSED_FILE, 100 * 1024 * 1024);
       
       if (!decompressed) {
-        console.error('All decompression methods failed.');
-        console.log('Falling back to sample data generation...');
+        console.error('Decompression failed. Falling back to sample data generation...');
         await createSampleData(writer);
       } else {
         // Process the decompressed file
