@@ -4,11 +4,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createReadStream, createWriteStream } from 'fs';
 import { Writable, Transform, TransformCallback, pipeline, Readable } from 'stream';
-import * as zstandard from 'node-zstandard';
 import { parse } from '@mliebelt/pgn-parser';
 import { ParquetSchema, ParquetWriter } from 'parquetjs-lite';
 import { SHA256 } from 'crypto-js';
-import { execSync, spawn } from 'child_process';
+import { spawnSync, spawn } from 'child_process';
 import { promisify } from 'util';
 
 // Define proper types for PGN parser
@@ -48,7 +47,9 @@ const TEMP_DECOMPRESSED_FILE = path.resolve(__dirname, '../../data/temp_decompre
 const SAMPLE_PGN_DATA = path.resolve(__dirname, '../../data/sample_pgn_data.pgn');
 
 // Constants
-const MAX_MOVES = 5000; // Increased to ensure we get 2000-5000 moves
+const MIN_MOVES = 3000; // Minimum number of moves to extract
+const MIN_GAMES = 150;  // Minimum number of games to process
+const MAX_MOVES = 5000; // Maximum number of moves to extract
 const MAX_GAMES = 10000; // Adjust as needed
 
 // For tracking progress
@@ -163,8 +164,8 @@ class PgnAccumulator extends Transform {
           lastIndex = endIndex;
           this.gameCount++;
           
-          // Stop after processing MAX_GAMES
-          if (this.gameCount >= MAX_GAMES) {
+          // Stop after processing MAX_GAMES or if we've extracted enough moves
+          if (this.gameCount >= MAX_GAMES || (totalMoves >= MIN_MOVES && totalGames >= MIN_GAMES)) {
             this.buffer = '';
             callback();
             return;
@@ -349,6 +350,13 @@ class PgnProcessor extends Writable {
         if (totalGames % 10 === 0) {
           console.log(`Processed ${totalGames} games, extracted ${totalMoves} moves`);
         }
+        
+        // Check if we've extracted enough moves
+        if (totalMoves >= MIN_MOVES && totalGames >= MIN_GAMES) {
+          console.log(`Reached minimum threshold of ${MIN_MOVES} moves and ${MIN_GAMES} games`);
+          // Signal completion to stream pipeline
+          this.end();
+        }
       } catch (parseError) {
         gameFilterReasons.parseError++;
         console.error('Error parsing PGN:', parseError);
@@ -408,67 +416,27 @@ class PgnProcessor extends Writable {
   }
 }
 
-// Function to decompress using shell command
-function decompressUsingShell(inputFile: string, outputFile: string): boolean {
+// Function to decompress using shell command with spawnSync
+function decompressWithShell(inputFile: string, outputFile: string): boolean {
   try {
-    console.log('Attempting to decompress using system zstd command...');
-    execSync(`zstd -d -f --no-check "${inputFile}" -o "${outputFile}"`);
-    return fs.existsSync(outputFile) && fs.statSync(outputFile).size > 0;
+    console.log('Decompressing with zstd shell command...');
+    const result = spawnSync('zstd', ['-d', '-q', '-f', inputFile, '-o', outputFile]);
+    
+    if (result.status !== 0) {
+      console.error(`Decompression failed with exit code ${result.status}`);
+      console.error(`stderr: ${result.stderr.toString()}`);
+      return false;
+    }
+    
+    const fileExists = fs.existsSync(outputFile);
+    const fileSize = fileExists ? fs.statSync(outputFile).size : 0;
+    
+    console.log(`Decompression ${fileExists && fileSize > 0 ? 'successful' : 'failed'} (${fileSize} bytes)`);
+    return fileExists && fileSize > 0;
   } catch (error) {
     console.error('Shell decompression failed:', error);
     return false;
   }
-}
-
-// Function to decompress with zstdcat and pipe through head to handle corruption
-function decompressPartialFileWithZstdCat(inputFile: string, outputFile: string, maxBytes = 100000000): Promise<boolean> {
-  return new Promise((resolve) => {
-    console.log(`Attempting to decompress first ${maxBytes / 1000000}MB of file using zstdcat | head...`);
-    
-    try {
-      const zstdCat = spawn('zstdcat', ['--no-check', inputFile]);
-      const head = spawn('head', ['-c', maxBytes.toString()]);
-      const outputStream = fs.createWriteStream(outputFile);
-      
-      zstdCat.stdout.pipe(head.stdin);
-      head.stdout.pipe(outputStream);
-      
-      // Handle possible errors
-      zstdCat.on('error', (err) => {
-        console.error('zstdcat error:', err);
-        resolve(false);
-      });
-      
-      head.on('error', (err) => {
-        console.error('head error:', err);
-        resolve(false);
-      });
-      
-      outputStream.on('error', (err) => {
-        console.error('Output stream error:', err);
-        resolve(false);
-      });
-      
-      outputStream.on('finish', () => {
-        const fileExists = fs.existsSync(outputFile);
-        const fileSize = fileExists ? fs.statSync(outputFile).size : 0;
-        console.log(`Partial decompression ${fileExists && fileSize > 0 ? 'successful' : 'failed'} (${fileSize} bytes)`);
-        resolve(fileExists && fileSize > 0);
-      });
-      
-      // Handle if zstdcat fails due to corruption
-      zstdCat.on('exit', (code) => {
-        if (code !== 0) {
-          // Even if zstdcat fails, we might have gotten some data
-          console.log(`zstdcat exited with code ${code}, but we may have partial data`);
-          // Let the outputStream finish event determine success
-        }
-      });
-    } catch (error) {
-      console.error('Failed to spawn decompression processes:', error);
-      resolve(false);
-    }
-  });
 }
 
 // Process PGN data and write to Parquet
@@ -544,44 +512,15 @@ async function main() {
     
     // Check if input file exists
     if (fs.existsSync(INPUT_FILE)) {
-      // Try different decompression methods in order
-      
-      // Method 1: Try node-zstandard's file-to-file API
-      try {
-        console.log('Attempt 1: Using node-zstandard decompressFileToFile...');
-        zstandard.decompressFileToFile(INPUT_FILE, TEMP_DECOMPRESSED_FILE);
+      // Try the shell command to decompress
+      if (decompressWithShell(INPUT_FILE, TEMP_DECOMPRESSED_FILE)) {
+        console.log('Decompression successful, now processing the PGN file...');
         
-        if (fs.existsSync(TEMP_DECOMPRESSED_FILE) && fs.statSync(TEMP_DECOMPRESSED_FILE).size > 0) {
-          console.log('Decompression successful, now processing the PGN file...');
-          
-          if (await processPgnData(TEMP_DECOMPRESSED_FILE, writer)) {
-            processingSuccessful = true;
-          }
-        } else {
-          console.error('Decompression created an empty file');
+        if (await processPgnData(TEMP_DECOMPRESSED_FILE, writer)) {
+          processingSuccessful = true;
         }
-      } catch (err1) {
-        console.error('Method 1 failed:', err1);
-        
-        // Method 2: Try shell zstd command with --no-check to ignore checksum errors
-        if (!processingSuccessful && decompressUsingShell(INPUT_FILE, TEMP_DECOMPRESSED_FILE)) {
-          console.log('Method 2 successful, now processing...');
-          
-          if (await processPgnData(TEMP_DECOMPRESSED_FILE, writer)) {
-            processingSuccessful = true;
-          }
-        }
-        
-        // Method 3: Try to decompress just part of the file to handle corruption
-        if (!processingSuccessful) {
-          if (await decompressPartialFileWithZstdCat(INPUT_FILE, TEMP_DECOMPRESSED_FILE)) {
-            console.log('Method 3 successful, now processing partial data...');
-            
-            if (await processPgnData(TEMP_DECOMPRESSED_FILE, writer)) {
-              processingSuccessful = true;
-            }
-          }
-        }
+      } else {
+        console.error('Failed to decompress file using zstd command');
       }
     } else {
       console.warn(`Input file not found: ${INPUT_FILE}`);
