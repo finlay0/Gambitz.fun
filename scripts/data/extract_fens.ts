@@ -460,12 +460,40 @@ async function processPgnData(inputFile: string, writer: ParquetWriter): Promise
     const accumulator = new PgnAccumulator();
     const processor = new PgnProcessor(writer);
     
+    // Set a timeout to handle cases where parsing gets stuck
+    const timeoutMs = 60000; // 60 seconds
+    let timeoutId: NodeJS.Timeout | null = null;
+    const lastGameCount = { value: 0 };
+    
+    // Promise that will resolve when either:
+    // 1. The pipeline finishes normally
+    // 2. The timeout occurs and no progress has been made
     return new Promise<boolean>((resolve) => {
+      // Set up a timeout checker
+      const checkProgress = () => {
+        if (totalGames === lastGameCount.value) {
+          console.warn(`No progress in ${timeoutMs/1000} seconds. Stopping extraction.`);
+          fileStream.destroy(); // Stop reading from file
+          resolve(validGamesFound); // Resolve with current status
+        } else {
+          lastGameCount.value = totalGames;
+          timeoutId = setTimeout(checkProgress, timeoutMs);
+        }
+      };
+      
+      // Start the initial timeout
+      timeoutId = setTimeout(checkProgress, timeoutMs);
+      
       pipeline(
         fileStream,
         accumulator,
         processor,
         (err: unknown) => {
+          // Clear the timeout when pipeline ends
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+          }
+          
           if (err) {
             console.error('Processing pipeline failed:', err);
             resolve(false);
