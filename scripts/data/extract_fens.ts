@@ -387,8 +387,16 @@ function decompressWithZstdCat(inputFile: string, outputFile: string): Promise<b
       // Create write stream for output file
       const outputStream = fs.createWriteStream(outputFile);
       
+      // Track if we've received any data
+      let receivedData = false;
+      
       // Pipe decompressed data to output file
       zstdCat.stdout.pipe(outputStream);
+      
+      // Check if we're getting data
+      zstdCat.stdout.on('data', (chunk) => {
+        receivedData = true;
+      });
       
       // Handle errors
       zstdCat.on('error', (err) => {
@@ -426,7 +434,13 @@ function decompressWithZstdCat(inputFile: string, outputFile: string): Promise<b
       // Handle zstdcat process exit
       zstdCat.on('exit', (code) => {
         if (code !== 0) {
-          console.warn(`zstdcat exited with code ${code}`);
+          // For corrupted zstd files, exit code 1 is common
+          // If we received data, consider it a partial success
+          if (code === 1 && receivedData) {
+            console.log('zstdcat exited with code 1, but data was received - continuing with partial file');
+          } else {
+            console.warn(`zstdcat exited with code ${code}`);
+          }
           // Let the outputStream.finish handler determine success
         }
       });
