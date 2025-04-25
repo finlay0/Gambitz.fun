@@ -420,7 +420,7 @@ class PgnProcessor extends Writable {
 function decompressWithShell(inputFile: string, outputFile: string): boolean {
   try {
     console.log('Decompressing with zstd shell command...');
-    const result = spawnSync('zstd', ['-d', '-q', '-f', inputFile, '-o', outputFile]);
+    const result = spawnSync('zstd', ['-d', '-q', '-f', '--no-check', inputFile, '-o', outputFile]);
     
     if (result.status !== 0) {
       console.error(`Decompression failed with exit code ${result.status}`);
