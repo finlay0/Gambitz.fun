@@ -9,17 +9,25 @@ import { ParquetSchema, ParquetWriter } from 'parquetjs-lite';
 import { SHA256 } from 'crypto-js';
 import { spawnSync, spawn } from 'child_process';
 import { promisify } from 'util';
+import { Chess } from 'chess.js';
 
 // Define proper types for PGN parser
+interface TimeControl {
+  kind: string;
+  seconds: number;
+  increment: number;
+  value: string;
+}
+
 interface PgnGame {
   tags: {
-    TimeControl?: string;
+    TimeControl?: string | TimeControl[];
     GameId?: string;
     WhiteElo?: string;
     BlackElo?: string;
     Result?: string;
     Site?: string;
-    [key: string]: string | undefined;
+    [key: string]: string | TimeControl[] | undefined;
   };
   moves: PgnMove[];
 }
@@ -42,15 +50,16 @@ const schema = new ParquetSchema({
 });
 
 // Paths
-const INPUT_FILE = path.resolve(__dirname, '../../data/raw/blitz_2024_03.pgn.zst');
+const DEFAULT_INPUT_FILE = path.resolve(__dirname, '../../data/raw/blitz_2024_03.pgn.zst');
 const OUTPUT_FILE = path.resolve(__dirname, '../../data/fen_moves.parquet');
 const TEMP_DECOMPRESSED_FILE = path.resolve(__dirname, '../../data/temp_decompressed.pgn');
 
 // Constants - configurable thresholds
-const MAX_MOVES = 200000;     // Stop after this many moves
+const DEFAULT_MAX_MOVES = 200000;     // Default stop after this many moves
 const MAX_GAMES = 10000;      // Stop after this many games
 const LOG_INTERVAL = 5000;    // Log progress every N moves
 const MIN_TEMP_FILE_SIZE_MB = 1; // Minimum size (MB) for temp file to be considered valid
+const EXTRACT_IDLE_MS = parseInt(process.env.EXTRACT_IDLE_MS ?? '900000'); // Default 15 minutes
 
 // For tracking progress
 let totalMoves = 0;
@@ -155,22 +164,60 @@ class PgnAccumulator extends Transform {
 class PgnProcessor extends Writable {
   private writer: ParquetWriter;
   private lastLoggedMoves: number = 0;
+  private validationErrors: number = 0;
+  private writeQueue: Promise<void> = Promise.resolve();
+  private isEnded: boolean = false;
+  private maxMoves: number;
+  private rowsWritten: number = 0;
   
-  constructor(writer: ParquetWriter, options = {}) {
+  constructor(writer: ParquetWriter, maxMoves: number, options = {}) {
     super({ ...options, objectMode: true });
     this.writer = writer;
+    this.maxMoves = maxMoves;
+  }
+  
+  private validateTimeControl(timeControl: string | TimeControl[] | undefined): boolean {
+    if (!timeControl) {
+      return false;
+    }
+    
+    if (typeof timeControl === 'string') {
+      return timeControl === '180+2';
+    }
+    
+    if (Array.isArray(timeControl)) {
+      return timeControl.some(tc => 
+        tc.kind === 'increment' && 
+        tc.seconds === 180 && 
+        tc.increment === 2
+      );
+    }
+    
+    return false;
   }
   
   async _write(pgnString: string, encoding: BufferEncoding, callback: (error?: Error | null) => void): Promise<void> {
     try {
-      // Skip empty strings
-      if (!pgnString || !pgnString.trim()) {
+      // Skip empty strings or if stream is ended
+      if (!pgnString || !pgnString.trim() || this.isEnded) {
+        callback();
+        return;
+      }
+      
+      // Check if we've reached the move limit before processing
+      if (totalMoves >= this.maxMoves) {
+        console.log(`Reached maximum of ${this.maxMoves} moves. Stopping extraction.`);
+        this.isEnded = true;
         callback();
         return;
       }
       
       // Early check for blitz games (3+2)
-      if (!pgnString.includes('[TimeControl "180+2"]')) {
+      if (!pgnString.includes('[TimeControl "180+2"]') && !pgnString.includes('"value":"180+2"')) {
+        // Only log if it's a blitz game with wrong time control
+        if (pgnString.includes('[Event "Rated Blitz game"]')) {
+          console.log('Reject reason: wrongTimeControl', pgnString.substring(0, 500));
+        }
         gameFilterReasons.notBlitz++;
         callback();
         return;
@@ -183,7 +230,8 @@ class PgnProcessor extends Writable {
         const game = parsedGame as PgnGame;
         
         // Verify time control again after parsing
-        if (!game.tags || game.tags.TimeControl !== '180+2') {
+        if (!this.validateTimeControl(game.tags.TimeControl)) {
+          console.log('Reject reason: invalidTimeControl', JSON.stringify(game.tags, null, 2));
           gameFilterReasons.invalidTimeControl++;
           callback();
           return;
@@ -191,16 +239,8 @@ class PgnProcessor extends Writable {
         
         // Skip if no moves
         if (!game.moves || game.moves.length === 0) {
+          console.log('Reject reason: noMoves', JSON.stringify(game.tags, null, 2));
           gameFilterReasons.noMoves++;
-          callback();
-          return;
-        }
-        
-        // Check if this game has at least some clock annotations
-        const hasSomeClockInfo = game.moves.some(move => move.commentDiag && move.commentDiag.clk);
-        
-        if (!hasSomeClockInfo) {
-          gameFilterReasons.noClockInfo++;
           callback();
           return;
         }
@@ -214,8 +254,9 @@ class PgnProcessor extends Writable {
           gameId = SHA256(pgnString).toString().substring(0, 16);
         }
         
-        // Process each move to extract FEN and timing information
-        let currentFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'; // Starting position
+        // Use chess.js to track the board
+        const board = new Chess();
+        let currentFen = board.fen(); // Always use board's FEN
         
         // Track clocks for each player (white = 0, black = 1)
         const playerClocks: number[] = [180000, 180000]; // Start with 3 minutes (180 seconds) in ms
@@ -224,10 +265,10 @@ class PgnProcessor extends Writable {
         
         // Process moves
         for (let index = 0; index < game.moves.length; index++) {
-          if (totalMoves >= MAX_MOVES) {
-            console.log(`Reached maximum of ${MAX_MOVES} moves. Stopping extraction.`);
-            // Signal completion to stream pipeline
-            this.end();
+          // Check move limit before processing each move
+          if (totalMoves >= this.maxMoves) {
+            console.log(`Reached maximum of ${this.maxMoves} moves. Stopping extraction.`);
+            this.isEnded = true;
             break;
           }
           
@@ -279,33 +320,69 @@ class PgnProcessor extends Writable {
           // Calculate move number (starting from 1)
           const moveNo = Math.floor(index / 2) + 1;
           
-          // Update FEN if provided, or keep current
-          if (move.fen) {
-            currentFen = move.fen;
+          // Use chess.js to push SAN and get FEN
+          try {
+            const san = move.move || move.notation?.san || '';
+            if (!board.move(san)) {
+              throw new Error('Illegal SAN: ' + san);
+            }
+            currentFen = board.fen();
+          } catch(e: any) {
+            console.warn('Skip illegal move', e.message);
+            continue; // skip this move
           }
           
-          try {
-            // Write to Parquet
-            await this.writer.appendRow({
-              game_id: gameId,
-              move_no: moveNo, 
-              fen: currentFen,
-              ply_ms: plyMs
-            });
-            
-            totalMoves++;
-            moveCount++;
-            
-            // Log progress at intervals
-            if (totalMoves - this.lastLoggedMoves >= LOG_INTERVAL) {
-              console.log(`Extracted ${totalMoves} moves from ${totalGames} games so far...`);
-              this.lastLoggedMoves = totalMoves;
+          // Validate data before writing
+          if (!gameId || !moveNo || !currentFen || !plyMs) {
+            this.validationErrors++;
+            if (this.validationErrors % 1000 === 0) {
+              console.error(`Validation errors: ${this.validationErrors} (last error: ${JSON.stringify({ gameId, moveNo, currentFen, plyMs })})`);
             }
-          } catch (appendError) {
-            console.error('Error appending row to Parquet:', appendError);
-            // Continue despite append error
+            continue;
           }
+          
+          // Queue the write operation to ensure sequential writes
+          this.writeQueue = this.writeQueue.then(async () => {
+            try {
+              // Create the row data with proper types
+              const row = {
+                game_id: String(gameId),
+                move_no: Number(moveNo),
+                fen: String(currentFen),
+                ply_ms: Number(plyMs)
+              };
+              
+              // Log the first few rows for debugging
+              if (this.rowsWritten < 5) {
+                console.log('Writing row:', JSON.stringify(row));
+              }
+              
+              await this.writer.appendRow(row);
+              this.rowsWritten++;
+              
+              totalMoves++;
+              moveCount++;
+              
+              // Log progress at intervals
+              if (totalMoves - this.lastLoggedMoves >= LOG_INTERVAL) {
+                console.log(`Extracted ${totalMoves} moves from ${totalGames} games so far...`);
+                this.lastLoggedMoves = totalMoves;
+              }
+              
+              // Check move limit after each write
+              if (totalMoves >= this.maxMoves) {
+                console.log(`Reached maximum of ${this.maxMoves} moves. Stopping extraction.`);
+                this.isEnded = true;
+              }
+            } catch (appendError) {
+              console.error('Error appending row to Parquet:', appendError);
+              throw appendError;
+            }
+          });
         }
+        
+        // Wait for all writes to complete before proceeding
+        await this.writeQueue;
         
         // Increment game counter and mark we found valid games
         totalGames++;
@@ -314,10 +391,13 @@ class PgnProcessor extends Writable {
         // Check if we've reached the game limit
         if (totalGames >= MAX_GAMES) {
           console.log(`Reached maximum of ${MAX_GAMES} games. Stopping extraction.`);
-          // Signal completion to stream pipeline
-          this.end();
+          this.isEnded = true;
         }
+        
+        // Log processed ply count for sanity
+        console.log("✓ processed", moveCount, "ply from", gameId);
       } catch (parseError) {
+        console.log('Reject reason: parseError', pgnString.substring(0, 500));
         gameFilterReasons.parseError++;
         skippedGames++;
         callback();
@@ -327,10 +407,42 @@ class PgnProcessor extends Writable {
       callback();
     } catch (error) {
       // Log error but continue processing
+      console.log('Reject reason: other', error);
       gameFilterReasons.other++;
       skippedGames++;
       console.error('Error processing game:', error);
       callback();
+    }
+  }
+  
+  async _final(callback: (error?: Error | null) => void): Promise<void> {
+    try {
+      // Wait for any pending writes to complete
+      await this.writeQueue;
+      
+      // Close the writer
+      if (this.writer) {
+        await this.writer.close();
+        console.log('Parquet writer closed successfully');
+        
+        // Verify the output file exists and has content
+        if (fs.existsSync(OUTPUT_FILE)) {
+          const stats = fs.statSync(OUTPUT_FILE);
+          if (stats.size === 0) {
+            console.error('WARNING: Output Parquet file is empty!');
+          } else {
+            console.log(`Final Parquet file size: ${(stats.size / (1024 * 1024)).toFixed(1)} MB`);
+          }
+        } else {
+          console.error('ERROR: Output Parquet file was not created!');
+        }
+      }
+      
+      this.isEnded = true;
+      callback();
+    } catch (error: unknown) {
+      console.error('Error in _final:', error);
+      callback(error instanceof Error ? error : new Error(String(error)));
     }
   }
 }
@@ -340,8 +452,8 @@ function decompressWithSystemZstd(inputFile: string, outputFile: string): boolea
   try {
     console.log(`Decompressing ${inputFile} with system zstd command...`);
     
-    // Use zstd CLI with -d (decompress), -f (force overwrite), -q (quiet)
-    const result = spawnSync('zstd', ['-d', '-f', '-q', inputFile, '-o', outputFile], {
+    // Use zstd CLI with -d (decompress), -f (force overwrite), -q (quiet), --no-check (skip integrity check)
+    const result = spawnSync('zstd', ['-d', '-f', '-q', '--no-check', inputFile, '-o', outputFile], {
       stdio: 'pipe',
       maxBuffer: 10 * 1024 * 1024 // 10MB buffer for process output
     });
@@ -378,49 +490,30 @@ function decompressWithSystemZstd(inputFile: string, outputFile: string): boolea
   }
 }
 
-// Process PGN data and write to Parquet
-async function processPgnData(inputFile: string, writer: ParquetWriter): Promise<boolean> {
+// Function to process PGN data from a stream
+async function processPgnStream(stream: Readable, writer: ParquetWriter, maxMoves: number): Promise<boolean> {
   try {
-    console.log(`Processing PGN data from ${inputFile}...`);
+    console.log('Processing PGN data from stream...');
     
-    const fileStream = createReadStream(inputFile);
     const accumulator = new PgnAccumulator();
-    const processor = new PgnProcessor(writer);
+    const processor = new PgnProcessor(writer, maxMoves);
     
-    // Set a timeout to handle cases where parsing gets stuck
-    const timeoutMs = 60000; // 60 seconds
-    let timeoutId: NodeJS.Timeout | null = null;
-    const lastGameCount = { value: 0 };
+    // Create a transform stream to process data
+    const limitStream = new Transform({
+      transform(chunk, encoding, callback) {
+        this.push(chunk);
+        callback();
+      }
+    });
     
-    // Promise that will resolve when either:
-    // 1. The pipeline finishes normally
-    // 2. The timeout occurs and no progress has been made
+    // Set up the pipeline with the limit stream
     return new Promise<boolean>((resolve) => {
-      // Set up a timeout checker
-      const checkProgress = () => {
-        if (totalGames === lastGameCount.value) {
-          console.warn(`No progress in ${timeoutMs/1000} seconds. Stopping extraction.`);
-          fileStream.destroy(); // Stop reading from file
-          resolve(validGamesFound); // Resolve with current status
-        } else {
-          lastGameCount.value = totalGames;
-          timeoutId = setTimeout(checkProgress, timeoutMs);
-        }
-      };
-      
-      // Start the initial timeout
-      timeoutId = setTimeout(checkProgress, timeoutMs);
-      
       pipeline(
-        fileStream,
+        stream,
+        limitStream,
         accumulator,
         processor,
         (err: unknown) => {
-          // Clear the timeout when pipeline ends
-          if (timeoutId) {
-            clearTimeout(timeoutId);
-          }
-          
           if (err) {
             console.error('Processing pipeline failed:', err);
             resolve(false);
@@ -435,71 +528,108 @@ async function processPgnData(inputFile: string, writer: ParquetWriter): Promise
             console.log(`  - No moves: ${gameFilterReasons.noMoves}`);
             console.log(`  - Other issues: ${gameFilterReasons.other}`);
             
-            // Only consider successful if we found at least one valid game
             resolve(validGamesFound);
           }
         }
       );
     });
   } catch (error) {
-    console.error('Error in processPgnData:', error);
+    console.error('Error in processPgnStream:', error);
     return false;
   }
 }
 
 async function main() {
-  console.log('Starting FEN extraction from PGN...');
-  console.log(`Input: ${INPUT_FILE}`);
+  // Parse command line arguments
+  const args = process.argv.slice(2);
+  const useStdin = args.includes('--stream');
+  const inputArg = args.find(arg => arg.startsWith('--input='));
+  const maxMovesArg = args.find(arg => arg.startsWith('--maxMoves='));
+  const maxMoves = maxMovesArg ? parseInt(maxMovesArg.split('=')[1]) : DEFAULT_MAX_MOVES;
+  const inputPath = inputArg ? inputArg.split('=')[1] : DEFAULT_INPUT_FILE;
+  const isCompressed = inputPath.toLowerCase().endsWith('.zst');
+  
+  console.log('\n=== Starting FEN extraction ===');
+  console.log(`Input: ${useStdin ? 'stdin' : inputPath}`);
   console.log(`Output: ${OUTPUT_FILE}`);
-  console.log(`Extraction limits: ${MAX_MOVES} moves or ${MAX_GAMES} games`);
+  console.log(`Max moves: ${maxMoves}`);
+  console.log(`Current directory: ${process.cwd()}`);
+  console.log(`Output file absolute path: ${path.resolve(OUTPUT_FILE)}`);
   
   // Ensure output directory exists
   const outputDir = path.dirname(OUTPUT_FILE);
   if (!fs.existsSync(outputDir)) {
+    console.log(`Creating output directory: ${outputDir}`);
     fs.mkdirSync(outputDir, { recursive: true });
   }
   
-  // Create parquet writer
-  let writer: ParquetWriter | null = null;
-  let shouldCleanupTempFile = false;
+  // Clean up any existing files
+  if (fs.existsSync(OUTPUT_FILE)) {
+    console.log(`Removing existing output file: ${OUTPUT_FILE}`);
+    fs.unlinkSync(OUTPUT_FILE);
+  }
   
+  // Create parquet writer with proper configuration
+  let writer: ParquetWriter | null = null;
   try {
-    writer = await ParquetWriter.openFile(schema, OUTPUT_FILE);
+    console.log('\nCreating Parquet writer...');
+    writer = await ParquetWriter.openFile(schema, OUTPUT_FILE, {
+      pageSize: 8 * 1024, // 8KB page size
+      rowGroupSize: 8 * 1024 * 1024, // 8 MB row group size
+      useDataPageV2: true
+    });
+    console.log('Parquet writer created successfully');
     
-    // Check if input file exists
-    if (!fs.existsSync(INPUT_FILE)) {
-      console.error(`Input file not found: ${INPUT_FILE}. Cannot proceed.`);
-      process.exit(1);
-    }
-    
-    let processingInputFile = INPUT_FILE;
-    
-    // Decompress if input is a .zst file
-    if (INPUT_FILE.toLowerCase().endsWith('.zst')) {
-      console.log('Input file is .zst, attempting decompression...');
-      if (decompressWithSystemZstd(INPUT_FILE, TEMP_DECOMPRESSED_FILE)) {
-        processingInputFile = TEMP_DECOMPRESSED_FILE;
-        shouldCleanupTempFile = true; // Mark for cleanup
-      } else {
-        console.error('Decompression failed or resulting file is too small. Aborting.');
+    if (useStdin) {
+      console.log('\nProcessing from stdin...');
+      const stdinStream = process.stdin;
+      stdinStream.setEncoding('utf8');
+      await processPgnStream(stdinStream, writer, maxMoves);
+    } else {
+      // Check if input file exists
+      if (!fs.existsSync(inputPath)) {
+        console.error(`\nInput file not found: ${inputPath}. Cannot proceed.`);
         process.exit(1);
       }
-    } else {
-      console.log('Input file is not .zst, processing directly...');
+      
+      if (isCompressed) {
+        console.log('\nInput file is .zst, starting zstd process...');
+        const zstdProcess = spawn('zstd', ['-dc', '--no-check', inputPath]);
+        
+        // Handle zstd process events
+        zstdProcess.on('error', (err) => {
+          console.error('\nFailed to start zstd process:', err);
+          process.exit(1);
+        });
+        
+        zstdProcess.on('exit', (code) => {
+          if (code !== 0) {
+            console.error(`\nzstd process exited with code ${code}`);
+            process.exit(1);
+          }
+        });
+        
+        // Handle zstd output
+        zstdProcess.stderr.on('data', (data) => {
+          console.error('zstd error:', data.toString());
+        });
+        
+        const zstdStream = zstdProcess.stdout;
+        zstdStream.setEncoding('utf8');
+        
+        console.log('Starting PGN stream processing...');
+        await processPgnStream(zstdStream, writer, maxMoves);
+      } else {
+        console.log('\nInput file is not .zst, processing directly...');
+        const fileStream = createReadStream(inputPath, {
+          encoding: 'utf8'
+        });
+        await processPgnStream(fileStream, writer, maxMoves);
+      }
     }
     
-    // Process the (potentially decompressed) PGN file
-    const processSuccess = await processPgnData(processingInputFile, writer);
-    
-    if (!processSuccess || totalMoves === 0) {
-      console.warn('No valid blitz (3+2) games found or extracted. Parquet file might be empty or incomplete.');
-      // Don't exit with error, but report the issue
-    }
-    
-    // Close the writer
-    if (writer) {
-      await writer.close();
-      console.log('Parquet file closed successfully.');
+    if (!validGamesFound || totalMoves === 0) {
+      console.warn('\nNo valid blitz (3+2) games found or extracted. Parquet file might be empty or incomplete.');
     }
     
     // Report final results
@@ -509,31 +639,11 @@ async function main() {
       console.log(`   to ${OUTPUT_FILE} (size ≈ ${(parquetSize / (1024 * 1024)).toFixed(1)} MB)`);
     } else {
       console.error('\nFAILED: Could not extract any FEN data.');
-      // Keep the exit code 0 if processing finished, but indicate failure
+      process.exit(1);
     }
   } catch (error) {
-    console.error('Unhandled error during extraction:', error);
+    console.error('\nUnhandled error during extraction:', error);
     process.exit(1);
-  } finally {
-    // Clean up temporary file if it was created
-    if (shouldCleanupTempFile && fs.existsSync(TEMP_DECOMPRESSED_FILE)) {
-      try {
-        fs.unlinkSync(TEMP_DECOMPRESSED_FILE);
-        console.log('Temporary decompressed file cleaned up.');
-      } catch (cleanupError) {
-        console.error('Error cleaning up temporary file:', cleanupError);
-      }
-    }
-    
-    // Ensure writer is closed even if errors occurred before the main close block
-    if (writer) {
-      try {
-        await writer.close();
-        console.log('Parquet writer closed in finally block.');
-      } catch (closeError) {
-        console.error('Additionally failed to close Parquet writer in finally block:', closeError);
-      }
-    }
   }
 }
 
