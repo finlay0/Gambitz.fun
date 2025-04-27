@@ -32,3 +32,9 @@ pnpm-debug.log*
 .cache/
 .eslintcache
 *.tsbuildinfo
+
+# Data files (large/generated)
+data/fen_moves.parquet
+data/fen_eval.parquet
+data/raw/
+data/processed/
