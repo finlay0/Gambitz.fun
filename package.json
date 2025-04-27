@@ -15,12 +15,18 @@
   },
   "packageManager": "pnpm@10.8.1",
   "devDependencies": {
+    "@dsnp/parquetjs": "^1.8.6",
     "@metaplex-foundation/js": "^0.20.1",
     "@metaplex-foundation/mpl-bubblegum": "^4.4.0",
+    "@mliebelt/pgn-parser": "^1.4.16",
     "@solana/web3.js": "^1.98.0",
+    "@types/crypto-js": "^4.2.2",
     "@types/node": "^20.17.30",
+    "crypto-js": "^4.2.0",
     "husky": "^8.0.0",
     "lint-staged": "^15.5.1",
+    "node-zstandard": "^1.2.4",
+    "parquetjs-lite": "^0.8.7",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3"
   },
@@ -28,6 +34,8 @@
     "@metaplex-foundation/umi": "^1.2.0",
     "@metaplex-foundation/umi-bundle-defaults": "^1.2.0",
     "@metaplex-foundation/umi-signer-wallet-adapters": "^1.2.0",
-    "@metaplex-foundation/umi-web3js-adapters": "^1.2.0"
+    "@metaplex-foundation/umi-web3js-adapters": "^1.2.0",
+    "chess.js": "^1.2.0",
+    "zstd-codec": "^0.1.5"
   }
 }
