@@ -1,4 +1,4 @@
-# chessbets.fun  
+# Gambitz.fun  
 Real‑money blitz chess on Solana
 
 Stake SOL, play 3 + 2, and claim trust‑minimised winnings secured by on‑chain escrow, AI cheat detection, and zero‑knowledge proofs.
