@@ -6,4 +6,24 @@ scripts/data/venv/* linguist-vendored
 *.pyc linguist-generated
 *.parquet linguist-generated
 /data/** linguist-generated
-/ml/** linguist-generated 
+/ml/** linguist-generated
+
+# Chess/game data
+*.pgn linguist-generated
+*.pgn.zst linguist-generated
+
+# Jupyter notebooks in ML
+/ml/**/*.ipynb linguist-generated
+
+# Rust build artifacts
+/scripts/data/target/** linguist-generated
+
+# Python/C/C++/Cython in data or ML
+/data/**/*.py linguist-generated
+/data/**/*.cpp linguist-generated
+/data/**/*.c linguist-generated
+/data/**/*.pyx linguist-generated
+/ml/**/*.py linguist-generated
+/ml/**/*.cpp linguist-generated
+/ml/**/*.c linguist-generated
+/ml/**/*.pyx linguist-generated 
