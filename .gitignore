@@ -44,3 +44,7 @@ rust-toolchain.toml
 
 # Ignore all raw data files
 /data/raw/
+
+# New additions
+test-ledger/
+scripts/data/venv/
