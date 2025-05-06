@@ -48,3 +48,4 @@ rust-toolchain.toml
 # New additions
 test-ledger/
 scripts/data/venv/
+scripts/data/venv/
