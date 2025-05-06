@@ -38,3 +38,9 @@ data/fen_moves.parquet
 data/fen_eval.parquet
 data/raw/
 data/processed/
+
+# Rust toolchain file
+rust-toolchain.toml
+
+# Ignore all raw data files
+/data/raw/

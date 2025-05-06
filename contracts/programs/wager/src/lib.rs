@@ -209,11 +209,39 @@ pub mod wager {
             WagerError::MatchAlreadySettled
         );
         
-        // Calculate payouts
-        let total_stake = match_account.stake_lamports.checked_mul(2).unwrap();
-        let winner_payout = total_stake.checked_mul(WINNER_PCT).unwrap().checked_div(10000).unwrap();
-        let platform_payout = total_stake.checked_mul(PLATFORM_PCT).unwrap().checked_div(10000).unwrap();
+        // Fail early if white_owner == black_owner
+        require!(
+            ctx.accounts.white_owner.key() != ctx.accounts.black_owner.key(),
+            WagerError::SameRoyaltyOwner
+        );
         
+        let stake_lamports = match_account.stake_lamports * 2;
+        let royalty = stake_lamports * 15 / 1000; // 1.5% each
+        let winner_cut = stake_lamports * 930 / 1000; // 93%
+        let platform_cut = stake_lamports - winner_cut - royalty * 2;
+        
+        // Transfer to white opening-NFT owner
+        anchor_lang::system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                anchor_lang::system_program::Transfer {
+                    from: ctx.accounts.match_account.to_account_info(),
+                    to: ctx.accounts.white_owner.to_account_info(),
+                },
+            ),
+            royalty,
+        )?;
+        // Transfer to black opening-NFT owner
+        anchor_lang::system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                anchor_lang::system_program::Transfer {
+                    from: ctx.accounts.match_account.to_account_info(),
+                    to: ctx.accounts.black_owner.to_account_info(),
+                },
+            ),
+            royalty,
+        )?;
         // Transfer to winner
         anchor_lang::system_program::transfer(
             CpiContext::new(
@@ -223,9 +251,8 @@ pub mod wager {
                     to: ctx.accounts.winner.to_account_info(),
                 },
             ),
-            winner_payout,
+            winner_cut,
         )?;
-        
         // Transfer to platform
         anchor_lang::system_program::transfer(
             CpiContext::new(
@@ -235,13 +262,11 @@ pub mod wager {
                     to: ctx.accounts.platform.to_account_info(),
                 },
             ),
-            platform_payout,
+            platform_cut,
         )?;
-        
         // Mark match as settled
         let match_account = &mut ctx.accounts.match_account;
         match_account.is_settled = true;
-        
         Ok(())
     }
 
@@ -376,6 +401,16 @@ pub struct SettleMatch<'info> {
     )]
     pub platform: AccountInfo<'info>,
     
+    /// White opening-NFT owner
+    /// CHECK: Verified in instruction
+    #[account(mut)]
+    pub white_owner: AccountInfo<'info>,
+    
+    /// Black opening-NFT owner
+    /// CHECK: Verified in instruction
+    #[account(mut)]
+    pub black_owner: AccountInfo<'info>,
+    
     pub system_program: Program<'info, System>,
 }
 
@@ -427,4 +462,6 @@ pub enum WagerError {
     AmbiguousMove,
     #[msg("Game is not over yet")]
     GameNotOver,
+    #[msg("White and black opening-NFT owners cannot be the same account")]
+    SameRoyaltyOwner,
 }

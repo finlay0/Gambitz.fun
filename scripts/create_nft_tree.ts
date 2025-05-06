@@ -1,59 +1,48 @@
-import { Connection, clusterApiUrl, PublicKey, Transaction, Keypair } from '@solana/web3.js';
-import { 
-  createTree,
-  MPL_BUBBLEGUM_PROGRAM_ID,
-  TreeConfig,
-} from '@metaplex-foundation/mpl-bubblegum';
 import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
-import { fromWeb3JsKeypair, fromWeb3JsPublicKey } from '@metaplex-foundation/umi-web3js-adapters';
-import { appendFileSync, existsSync, writeFileSync } from 'fs';
-import { payer, connection } from './_shared';
-import { generateSigner, none, publicKey, createSignerFromKeypair, signerIdentity } from '@metaplex-foundation/umi';
+import { generateSigner, signerIdentity, createSignerFromKeypair } from '@metaplex-foundation/umi';
+import { createTree } from '@metaplex-foundation/mpl-bubblegum';
+import { Keypair, Connection, clusterApiUrl, PublicKey } from '@solana/web3.js';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { fromWeb3JsKeypair } from '@metaplex-foundation/umi-web3js-adapters';
+import { join } from 'path';
+import { getPayer } from './utils/getPayer';
+import { saveEnv } from './utils/env';
 
 async function main() {
-  try {
-    console.log('Creating Merkle tree...');
+  // Connect to Devnet
+  const connection = new Connection(clusterApiUrl('devnet'));
 
-    // Initialize Umi with our payer
-    const umi = createUmi(connection);
-    const payerSigner = createSignerFromKeypair(umi, fromWeb3JsKeypair(payer));
-    umi.use(signerIdentity(payerSigner));
+  // Load payer keypair
+  const payer = getPayer();
+  console.log('Using payer public key:', payer.publicKey.toBase58());
 
-    // Generate a new keypair for the tree and convert to Umi signer
-    const treeSigner = generateSigner(umi);
+  // Set up Umi instance
+  const umi = createUmi(connection);
+  const payerSigner = createSignerFromKeypair(umi, fromWeb3JsKeypair(payer));
+  umi.use(signerIdentity(payerSigner));
 
-    // Create the tree with specified parameters
-    const builder = await createTree(
-      umi,
-      {
-        merkleTree: treeSigner,
-        maxDepth: 14,
-        maxBufferSize: 256,
-        public: true,
-      }
-    );
+  // Generate a new keypair for the tree
+  const treeSigner = generateSigner(umi);
 
-    // Send the transaction
-    const result = await builder.sendAndConfirm(umi);
+  // Create the Merkle tree
+  const builder = await createTree(umi, {
+    merkleTree: treeSigner,
+    maxDepth: 14, // 2^14 = 16,384 leaves (Bubblegum devnet standard)
+    maxBufferSize: 64, // supported buffer size
+    canopyDepth: 3,
+    public: true,
+  });
+  const result = await builder.sendAndConfirm(umi);
 
-    console.log(`Tree created successfully!`);
-    console.log(`Tree address: ${treeSigner.publicKey}`);
-    console.log(`Transaction: ${result.signature.toString()}`);
+  const treeAddress = treeSigner.publicKey;
+  const treeAddressBase58 = new PublicKey(treeAddress).toBase58();
+  console.log('Merkle tree public key:', treeAddressBase58);
 
-    // Ensure .env.local exists
-    if (!existsSync('.env.local')) {
-      writeFileSync('.env.local', '');
-      console.log('Created .env.local file');
-    }
+  // Save TREE_ADDRESS in .env.local
+  saveEnv('TREE_ADDRESS', treeAddressBase58);
+  console.log('✅ New TREE_ADDRESS saved');
 
-    // Append tree address to .env.local with append flag
-    appendFileSync('.env.local', `\nTREE_ADDRESS=${treeSigner.publicKey}`, { flag: 'a' });
-    console.log('Tree address appended to .env.local');
-
-  } catch (error) {
-    console.error('Error creating tree:', error);
-    process.exit(1);
-  }
+  process.exit(0);
 }
 
 main(); 

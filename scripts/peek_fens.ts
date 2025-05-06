@@ -2,7 +2,7 @@ import { ParquetReader } from 'parquetjs-lite';
 
 async function peek() {
   // @ts-ignore
-  const reader = await ParquetReader.openFile('data/fen_moves.parquet');
+  const reader = await ParquetReader.openFile('data/training.parquet');
   const cursor = reader.getCursor();
 
   console.log('=== First 5 rows ===');
@@ -14,7 +14,7 @@ async function peek() {
   // (you'll need to reopen; parquetjs-lite cursor isn't rewindable)
   await reader.close();
   // @ts-ignore
-  const reader2 = await ParquetReader.openFile('data/fen_moves.parquet');
+  const reader2 = await ParquetReader.openFile('data/training.parquet');
   const cursor2 = reader2.getCursor();
   const total = reader2.getRowCount();
   const skip = Math.floor(total / 2);
