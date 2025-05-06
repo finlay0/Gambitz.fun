@@ -1,0 +1,9 @@
+# Exclude vendored files from language stats
+scripts/data/venv/* linguist-vendored
+*.so linguist-vendored
+
+# Exclude generated files from language stats
+*.pyc linguist-generated
+*.parquet linguist-generated
+/data/** linguist-generated
+/ml/** linguist-generated 
