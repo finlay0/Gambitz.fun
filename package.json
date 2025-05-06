@@ -5,7 +5,10 @@
     "dev:web": "pnpm --filter ./web... dev",
     "dev:contracts": "pnpm --filter ./contracts... test",
     "test": "pnpm run dev:contracts && pnpm --filter ./web... lint",
-    "prepare": "husky install"
+    "prepare": "husky install",
+    "mint:openings": "ts-node scripts/mint_openings.ts",
+    "tree:create": "ts-node scripts/create_nft_tree.ts",
+    "gen:openings": "ts-node scripts/gen_openings_json.ts"
   },
   "pnpm": {
     "overrides": {
@@ -21,13 +24,18 @@
     "@mliebelt/pgn-parser": "^1.4.16",
     "@solana/web3.js": "^1.98.0",
     "@types/crypto-js": "^4.2.2",
+    "@types/mocha": "^10.0.10",
     "@types/node": "^20.17.30",
+    "@types/node-fetch": "2",
     "crypto-js": "^4.2.0",
+    "csv-parse": "^5.6.0",
     "husky": "^8.0.0",
     "lint-staged": "^15.5.1",
+    "mocha": "^11.2.2",
     "node-zstandard": "^1.2.4",
     "parquetjs-lite": "^0.8.7",
     "ts-node": "^10.9.2",
+    "tsx": "^4.19.4",
     "typescript": "^5.8.3"
   },
   "dependencies": {
@@ -35,7 +43,10 @@
     "@metaplex-foundation/umi-bundle-defaults": "^1.2.0",
     "@metaplex-foundation/umi-signer-wallet-adapters": "^1.2.0",
     "@metaplex-foundation/umi-web3js-adapters": "^1.2.0",
+    "bs58": "^6.0.0",
     "chess.js": "^1.2.0",
+    "node-fetch": "2",
+    "swr": "^2.3.3",
     "zstd-codec": "^0.1.5"
   }
 }
