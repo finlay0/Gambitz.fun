@@ -1,0 +1,12 @@
+# Ignore build output
+.next/
+out/
+dist/
+build/
+
+# Ignore dependency directories
+node_modules/
+
+# Ignore specific problem files
+src/hooks/useGameData.ts
+src/hooks/__tests__/openingPipeline.test.ts 

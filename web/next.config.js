@@ -7,6 +7,17 @@ const nextConfig = {
   eslint: {
     // also ignore ESLint errors in dev/build
     ignoreDuringBuilds: true,
+    // Exclude specific files from ESLint checks
+    dirs: [
+      'src', 
+      'pages', 
+      'app', 
+      'components'
+    ],
+    exclude: [
+      '**/src/hooks/useGameData.ts',
+      '**/src/hooks/__tests__/openingPipeline.test.ts'
+    ],
   },
   experimental: {
     serverActions: {

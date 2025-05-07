@@ -242,6 +242,9 @@ export const IDL: Idl = {
           },
           {
             name: "disconnect"
+          },
+          {
+            name: "draw"
           }
         ]
       }
@@ -310,12 +313,13 @@ export type ResultVariant = {
   resign?: object;
   timeout?: object;
   disconnect?: object;
+  draw?: object;
 };
 
 /**
  * Valid result variant names as a tuple type
  */
-export const RESULT_VARIANTS = ['mate', 'resign', 'timeout', 'disconnect'] as const;
+export const RESULT_VARIANTS = ['mate', 'resign', 'timeout', 'disconnect', 'draw'] as const;
 
 /**
  * Type guard to check if a value is a valid ResultVariant

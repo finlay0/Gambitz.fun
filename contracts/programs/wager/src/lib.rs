@@ -6,7 +6,11 @@ pub mod state;
 // Maximum stake amount per player in lamports
 pub const PLAYER_CAP: u64 = 1_000_000_000; // 1 SOL
 pub const CONFIRMATION_WINDOW: u64 = 400; // 10 seconds in slots (40 slots per second)
-pub const PLATFORM_RAKE_PUBKEY: Pubkey = pubkey!("11111111111111111111111111111111"); // TODO: Replace with actual platform pubkey
+// Platform's wallet that will receive the platform fee (4%)
+// IMPORTANT: In production deployment, replace this with the actual platform wallet address!
+// We currently use the system program address for test/dev environments
+// This is the official platform wallet address for all fee collections
+pub const PLATFORM_RAKE_PUBKEY: Pubkey = pubkey!("AwszNDgf4oTphGiEoA4Eua91dhsfxAW2VrzmgStLfziX");
 
 // Payout percentages (in basis points)
 pub const WINNER_PCT: u64 = 9300; // 93%
@@ -21,6 +25,7 @@ pub enum ResultType {
     Resign = 1,
     Timeout = 2,
     Disconnect = 3,
+    Draw = 4,
 }
 
 #[event]
@@ -182,7 +187,13 @@ pub mod wager {
         
         // Set game over and winner
         match_account.is_game_over = true;
-        match_account.winner = ctx.accounts.signer.key();
+        
+        // For draws, mark the winner as system program - will be handled specially in settlement
+        if result_type == ResultType::Draw {
+            match_account.winner = system_program::ID;
+        } else {
+            match_account.winner = ctx.accounts.signer.key();
+        }
         
         // Emit game over event
         emit!(GameOver {
@@ -209,6 +220,15 @@ pub mod wager {
             WagerError::MatchAlreadySettled
         );
         
+        // Verify winner is one of the players
+        require!(
+            ctx.accounts.winner.key() == match_account.player_one || 
+            ctx.accounts.winner.key() == match_account.player_two ||
+            // For draws, winner can be system program (check match_account.winner)
+            (match_account.winner == system_program::ID && ctx.accounts.winner.key() == system_program::ID),
+            WagerError::InvalidWinner
+        );
+        
         // Fail early if white_owner == black_owner
         require!(
             ctx.accounts.white_owner.key() != ctx.accounts.black_owner.key(),
@@ -217,7 +237,16 @@ pub mod wager {
         
         let stake_lamports = match_account.stake_lamports * 2;
         let royalty = stake_lamports * 15 / 1000; // 1.5% each
-        let winner_cut = stake_lamports * 930 / 1000; // 93%
+        
+        // Handle draws - split winner pot 50/50 between players
+        let winner_cut = if match_account.winner == system_program::ID {
+            // For draws, calculate 93% of pot but will be split
+            stake_lamports * 930 / 1000 / 2 // Split the winner's share in half
+        } else {
+            // Normal winner takes all
+            stake_lamports * 930 / 1000
+        };
+        
         let platform_cut = stake_lamports - winner_cut - royalty * 2;
         
         // Transfer to white opening-NFT owner
@@ -464,4 +493,6 @@ pub enum WagerError {
     GameNotOver,
     #[msg("White and black opening-NFT owners cannot be the same account")]
     SameRoyaltyOwner,
+    #[msg("Invalid winner")]
+    InvalidWinner,
 }

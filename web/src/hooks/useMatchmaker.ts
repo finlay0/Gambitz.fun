@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { Program, AnchorProvider, web3, BN } from '@coral-xyz/anchor';
 import { ResultVariant, PROGRAM_IDL } from '@/types/wager';
+import { useFinalOpenings } from './useFinalOpenings';
+import { PublicKey } from '@solana/web3.js';
 
 const WS_URL = 'wss://api.chessbets.fun/ws';
 const MAX_RECONNECT_ATTEMPTS = 5;
@@ -18,6 +20,9 @@ export function useMatchmaker(timeControl: number) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Get the functions for opening detection and NFT ownership
+  const { prepareSettlementAccounts } = useFinalOpenings();
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -173,17 +178,37 @@ export function useMatchmaker(timeControl: number) {
     }
   }, [connection, publicKey, signTransaction, signAllTransactions, matchPda]);
 
-  const settleMatch = useCallback(async () => {
-    if (!publicKey || !signTransaction || !signAllTransactions || !matchPda) return;
+  const settleMatch = useCallback(async (moveHistory: string[], winnerKey: PublicKey) => {
+    if (!publicKey || !signTransaction || !signAllTransactions || !matchPda) {
+      console.error('Missing required parameters for settlement');
+      setError('Cannot settle - missing required parameters');
+      return;
+    }
 
     try {
       const provider = new AnchorProvider(connection, { publicKey, signTransaction, signAllTransactions }, {});
       const program = new Program(PROGRAM_IDL, new web3.PublicKey('GZJ54HYGi1Qx9GKeC9Ncbu2upkCwxGdrXxaQE9b2JVCM'), provider);
 
+      // Get opening NFT owner addresses for royalty distribution
+      const settlementAccounts = await prepareSettlementAccounts(matchPda, winnerKey, moveHistory);
+
+      console.log('Settling match with accounts:', {
+        whiteOwner: settlementAccounts.whiteOwner.toString(),
+        blackOwner: settlementAccounts.blackOwner.toString(),
+        winner: settlementAccounts.winner.toString(),
+        matchPda: matchPda.toString()
+      });
+
       await program.methods
         .settleMatch()
         .accounts({
-          matchAccount: matchPda,
+          matchAccount: settlementAccounts.matchAccount,
+          winner: settlementAccounts.winner,
+          platform: settlementAccounts.platform,
+          whiteOwner: settlementAccounts.whiteOwner,
+          blackOwner: settlementAccounts.blackOwner,
+          systemProgram: web3.SystemProgram.programId,
+          signer: publicKey
         })
         .rpc();
 
@@ -193,8 +218,9 @@ export function useMatchmaker(timeControl: number) {
       console.error('Failed to settle match:', err);
       setError('Failed to settle match');
       setState('error');
+      throw err; // Rethrow to allow caller to handle
     }
-  }, [connection, publicKey, signTransaction, signAllTransactions, matchPda]);
+  }, [connection, publicKey, signTransaction, signAllTransactions, matchPda, prepareSettlementAccounts]);
 
   return {
     state,

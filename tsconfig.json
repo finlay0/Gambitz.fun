@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "es2020",
     "module": "commonjs",
-    "lib": ["es2020"],
+    "lib": ["es2020", "dom"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -10,7 +10,9 @@
     "moduleResolution": "node",
     "resolveJsonModule": true,
     "outDir": "dist",
-    "typeRoots": ["./node_modules/@types", "./scripts/data"]
+    "typeRoots": ["./node_modules/@types"],
+    "noImplicitAny": false,
+    "types": ["node"]
   },
   "include": ["scripts/**/*"],
   "exclude": ["node_modules"]

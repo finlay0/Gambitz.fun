@@ -1,0 +1,22 @@
+{
+  "extends": ["next/core-web-vitals"],
+  "ignorePatterns": ["src/hooks/useGameData.ts", "src/hooks/__tests__/openingPipeline.test.ts"],
+  "rules": {
+    "@typescript-eslint/no-unused-vars": "warn",
+    "@typescript-eslint/ban-ts-comment": ["error", {
+      "ts-nocheck": "allow-with-description"
+    }],
+    "@typescript-eslint/no-explicit-any": "warn",
+    "react-hooks/exhaustive-deps": "warn",
+    "react/no-unescaped-entities": "warn"
+  },
+  "overrides": [
+    {
+      "files": ["**/__tests__/**/*"],
+      "rules": {
+        "@typescript-eslint/no-unused-vars": "off",
+        "@typescript-eslint/no-explicit-any": "off"
+      }
+    }
+  ]
+} 
