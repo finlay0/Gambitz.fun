@@ -87,6 +87,16 @@ export const IDL: Idl = {
           }
         },
         {
+          name: "playerOneStats",
+          isMut: false,
+          isSigner: false
+        },
+        {
+          name: "playerTwoStats",
+          isMut: false,
+          isSigner: false
+        },
+        {
           name: "systemProgram",
           isMut: false,
           isSigner: false
@@ -96,6 +106,10 @@ export const IDL: Idl = {
         {
           name: "stakeLamports",
           type: "u64"
+        },
+        {
+          name: "timeControlType",
+          type: "u8"
         }
       ]
     },
@@ -220,6 +234,40 @@ export const IDL: Idl = {
           {
             name: "startSlot",
             type: "u64"
+          },
+          {
+            name: "lastMoveSlot",
+            type: "u64"
+          },
+          {
+            name: "playerOneTime",
+            type: "u64"
+          },
+          {
+            name: "playerTwoTime",
+            type: "u64"
+          },
+          {
+            name: "isPlayerOneTurn",
+            type: "bool"
+          },
+          {
+            name: "isGameOver",
+            type: "bool"
+          },
+          {
+            name: "timeControlType",
+            type: "u8"
+          },
+          {
+            name: "currentPosition",
+            type: "string"
+          },
+          {
+            name: "moveHistory",
+            type: {
+              vec: "string"
+            }
           }
         ]
       }
