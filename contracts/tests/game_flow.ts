@@ -14,23 +14,26 @@ describe('game_flow', () => {
   let playerOne: Keypair;
   let playerTwo: Keypair;
   let platform: Keypair;
-  let whiteOwner: Keypair;
-  let blackOwner: Keypair;
+  let openingNftOwner: Keypair;
   
   const stakeAmount = 0.1 * LAMPORTS_PER_SOL;
+  const totalPot = stakeAmount * 2;
 
   beforeEach(async () => {
     // Generate fresh accounts for each test
     playerOne = Keypair.generate();
     playerTwo = Keypair.generate();
     platform = Keypair.generate();
-    whiteOwner = Keypair.generate();
-    blackOwner = Keypair.generate();
+    openingNftOwner = Keypair.generate();
 
     // Airdrop SOL to test accounts
-    await provider.connection.requestAirdrop(playerOne.publicKey, 2 * LAMPORTS_PER_SOL);
-    await provider.connection.requestAirdrop(playerTwo.publicKey, 2 * LAMPORTS_PER_SOL);
-    await provider.connection.requestAirdrop(platform.publicKey, 2 * LAMPORTS_PER_SOL);
+    const airdropPlayerOne = provider.connection.requestAirdrop(playerOne.publicKey, 2 * LAMPORTS_PER_SOL);
+    const airdropPlayerTwo = provider.connection.requestAirdrop(playerTwo.publicKey, 2 * LAMPORTS_PER_SOL);
+    const airdropPlatform = provider.connection.requestAirdrop(platform.publicKey, 2 * LAMPORTS_PER_SOL);
+    const airdropOpeningOwner = provider.connection.requestAirdrop(openingNftOwner.publicKey, 2 * LAMPORTS_PER_SOL);
+    
+    await Promise.all([airdropPlayerOne, airdropPlayerTwo, airdropPlatform, airdropOpeningOwner]);
+    await new Promise(resolve => setTimeout(resolve, 500));
   });
 
   it('creates and confirms match', async () => {
@@ -133,40 +136,52 @@ describe('game_flow', () => {
 
     // Submit result
     await program.methods
-      .submitResult(0) // Mate
+      .submitResult(0) // Mate, playerOne wins
       .accounts({
-        playerOne: playerOne.publicKey,
+        signer: playerOne.publicKey,
         matchAccount: matchPda,
       })
       .signers([playerOne])
       .rpc();
+
+    // Get initial balances before settlement for accurate delta checking
+    const initialWinnerBalance = await provider.connection.getBalance(playerOne.publicKey);
+    const initialPlayerTwoBalance = await provider.connection.getBalance(playerTwo.publicKey); // For completeness, though P2 is not winner here
+    const initialPlatformBalance = await provider.connection.getBalance(platform.publicKey);
+    const initialOpeningNftOwnerBalance = await provider.connection.getBalance(openingNftOwner.publicKey);
 
     // Settle match
     await program.methods
       .settleMatch()
       .accounts({
         matchAccount: matchPda,
-        winner: playerOne.publicKey,
+        winner: playerOne.publicKey, // playerOne is the winner
         platform: platform.publicKey,
-        whiteOwner: whiteOwner.publicKey,
-        blackOwner: blackOwner.publicKey,
+        openingOwner: openingNftOwner.publicKey, // Single opening owner
+        playerOneAccount: playerOne.publicKey, // Required by struct
+        playerTwoAccount: playerTwo.publicKey, // Required by struct
         systemProgram: anchor.web3.SystemProgram.programId,
+        signer: provider.wallet.publicKey, // Anyone can call settle
       })
       .rpc();
 
-    // Verify balances
-    const winnerBalance = await provider.connection.getBalance(playerOne.publicKey);
-    const platformBalance = await provider.connection.getBalance(platform.publicKey);
-    const whiteOwnerBalance = await provider.connection.getBalance(whiteOwner.publicKey);
-    const blackOwnerBalance = await provider.connection.getBalance(blackOwner.publicKey);
+    // Verify balances after settlement
+    const finalWinnerBalance = await provider.connection.getBalance(playerOne.publicKey);
+    const finalPlatformBalance = await provider.connection.getBalance(platform.publicKey);
+    const finalOpeningNftOwnerBalance = await provider.connection.getBalance(openingNftOwner.publicKey);
+    const finalPlayerTwoBalance = await provider.connection.getBalance(playerTwo.publicKey);
 
-    expect(winnerBalance).to.equal(stakeAmount * 1.86); // 93%
-    expect(platformBalance).to.equal(stakeAmount * 0.08); // 4%
-    expect(whiteOwnerBalance).to.equal(stakeAmount * 0.03); // 1.5%
-    expect(blackOwnerBalance).to.equal(stakeAmount * 0.03); // 1.5%
+    // Winner gets 93% of total pot
+    expect(finalWinnerBalance).to.equal(initialWinnerBalance + totalPot * 0.93);
+    // Platform gets 4% of total pot
+    expect(finalPlatformBalance).to.equal(initialPlatformBalance + totalPot * 0.04);
+    // Opening NFT owner gets 3% of total pot
+    expect(finalOpeningNftOwnerBalance).to.equal(initialOpeningNftOwnerBalance + totalPot * 0.03);
+    // Player two (loser) balance should be unchanged by settlement payouts
+    expect(finalPlayerTwoBalance).to.equal(initialPlayerTwoBalance);
   });
 
-  it('handles same opening owner', async () => {
+  it('handles game settlement with opening royalties (DRAW)', async () => {
     // Create and confirm match
     const [matchPda] = await PublicKey.findProgramAddress(
       [Buffer.from('chessbets'), playerOne.publicKey.toBuffer(), playerTwo.publicKey.toBuffer()],
@@ -187,43 +202,58 @@ describe('game_flow', () => {
     await program.methods
       .confirmMatch()
       .accounts({
-        playerTwo: playerTwo.publicKey,
+        playerTwo: playerTwo.publicKey, // playerTwo confirms
         matchAccount: matchPda,
       })
       .signers([playerTwo])
       .rpc();
 
-    // Submit result
+    // Submit result as a DRAW (e.g., playerOne submits it, could be either)
+    // ResultType::Draw is 4
     await program.methods
-      .submitResult(0) // Mate
+      .submitResult(4) 
       .accounts({
-        playerOne: playerOne.publicKey,
+        signer: playerOne.publicKey, 
         matchAccount: matchPda,
       })
       .signers([playerOne])
       .rpc();
 
-    // Settle match with same owner for both openings
+    // Get initial balances before settlement
+    const initialPlayerOneBalance = await provider.connection.getBalance(playerOne.publicKey);
+    const initialPlayerTwoBalance = await provider.connection.getBalance(playerTwo.publicKey);
+    const initialPlatformBalance = await provider.connection.getBalance(platform.publicKey);
+    const initialOpeningNftOwnerBalance = await provider.connection.getBalance(openingNftOwner.publicKey);
+
+    // Settle match for a DRAW
     await program.methods
       .settleMatch()
       .accounts({
         matchAccount: matchPda,
-        winner: playerOne.publicKey,
+        winner: anchor.web3.SystemProgram.programId, // Winner is SystemProgram for draws
         platform: platform.publicKey,
-        whiteOwner: whiteOwner.publicKey,
-        blackOwner: whiteOwner.publicKey, // Same owner
+        openingOwner: openingNftOwner.publicKey,
+        playerOneAccount: playerOne.publicKey, // Payout to player one
+        playerTwoAccount: playerTwo.publicKey, // Payout to player two
         systemProgram: anchor.web3.SystemProgram.programId,
+        signer: provider.wallet.publicKey, // Anyone can call settle
       })
       .rpc();
 
-    // Verify balances
-    const winnerBalance = await provider.connection.getBalance(playerOne.publicKey);
-    const platformBalance = await provider.connection.getBalance(platform.publicKey);
-    const ownerBalance = await provider.connection.getBalance(whiteOwner.publicKey);
+    // Verify balances after settlement for a DRAW
+    const finalPlayerOneBalance = await provider.connection.getBalance(playerOne.publicKey);
+    const finalPlayerTwoBalance = await provider.connection.getBalance(playerTwo.publicKey);
+    const finalPlatformBalance = await provider.connection.getBalance(platform.publicKey);
+    const finalOpeningNftOwnerBalance = await provider.connection.getBalance(openingNftOwner.publicKey);
 
-    expect(winnerBalance).to.equal(stakeAmount * 1.86); // 93%
-    expect(platformBalance).to.equal(stakeAmount * 0.08); // 4%
-    expect(ownerBalance).to.equal(stakeAmount * 0.06); // 3% (both shares)
+    const expectedPlayerShare = totalPot * 0.93 / 2; // Each player gets 46.5% of total pot
+    const expectedPlatformShare = totalPot * 0.04;
+    const expectedRoyaltyShare = totalPot * 0.03;
+
+    expect(finalPlayerOneBalance).to.equal(initialPlayerOneBalance + expectedPlayerShare);
+    expect(finalPlayerTwoBalance).to.equal(initialPlayerTwoBalance + expectedPlayerShare);
+    expect(finalPlatformBalance).to.equal(initialPlatformBalance + expectedPlatformShare);
+    expect(finalOpeningNftOwnerBalance).to.equal(initialOpeningNftOwnerBalance + expectedRoyaltyShare);
   });
 
   it('handles settlement failure', async () => {
@@ -257,7 +287,7 @@ describe('game_flow', () => {
     await program.methods
       .submitResult(0) // Mate
       .accounts({
-        playerOne: playerOne.publicKey,
+        signer: playerOne.publicKey,
         matchAccount: matchPda,
       })
       .signers([playerOne])
@@ -271,9 +301,11 @@ describe('game_flow', () => {
           matchAccount: matchPda,
           winner: playerOne.publicKey,
           platform: Keypair.generate().publicKey, // Invalid platform
-          whiteOwner: whiteOwner.publicKey,
-          blackOwner: blackOwner.publicKey,
+          openingOwner: openingNftOwner.publicKey,
+          playerOneAccount: playerOne.publicKey,
+          playerTwoAccount: playerTwo.publicKey,
           systemProgram: anchor.web3.SystemProgram.programId,
+          signer: provider.wallet.publicKey,
         })
         .rpc();
       expect.fail('Should have thrown error');

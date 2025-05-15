@@ -2,26 +2,27 @@ import { useCallback } from 'react';
 import { useHelius } from './useHelius';
 import { PublicKey } from '@solana/web3.js';
 import openings from '../../lib/openings.json';
-import { getOpeningFromMoves } from '../../lib/opening_data';
+import { getOpeningFromMoves, Opening } from '../../lib/opening_data';
 
-interface OpeningInfo {
+// Platform's wallet address from the contract
+const PLATFORM_RAKE_PUBKEY = new PublicKey("AwszNDgf4oTphGiEoA4Eua91dhsfxAW2VrzmgStLfziX");
+
+export interface GameOpeningInfo {
   eco: string;
-  mint: string;
-  owner: PublicKey | null;
+  mint: string | null; // Mint can be null if ECO has no associated mint
+  owner: PublicKey | null; // Owner can be null if mint has no owner or no mint
+  name?: string; // From getOpeningFromMoves
+  pgnMoves?: string[]; // From getOpeningFromMoves
 }
 
-export type FinalOpenings = {
-  white: OpeningInfo;
-  black: OpeningInfo;
-};
+export type GameOpeningResult = GameOpeningInfo | null;
 
-// These interfaces match what the contract expects for settlement
+// These interfaces match what the contract expects for settlement (will be updated)
 export interface SettlementAccounts {
   matchAccount: PublicKey;
   winner: PublicKey;
   platform: PublicKey;
-  whiteOwner: PublicKey;
-  blackOwner: PublicKey;
+  openingOwner: PublicKey; // Changed from whiteOwner and blackOwner
 }
 
 // Type for the openings.json file
@@ -32,135 +33,83 @@ type OpeningsMap = {
 export const useFinalOpenings = () => {
   const { getNFTOwner } = useHelius();
 
-  const getFinalOpenings = useCallback(async (moves: string[]): Promise<FinalOpenings> => {
-    // Separate white and black moves (white moves are at even indices, black at odd)
-    const whiteMoves = moves.filter((_, i) => i % 2 === 0);
-    const blackMoves = moves.filter((_, i) => i % 2 === 1);
-    
-    // Find the openings for white and black separately
-    const whiteOpening = getOpeningFromMoves(whiteMoves);
-    const blackOpening = getOpeningFromMoves(blackMoves);
-    
-    // Default to A00 for unknown openings
-    const whiteEco = whiteOpening?.eco || 'A00';
-    const blackEco = blackOpening?.eco || 'A00';
-    
-    // Get corresponding mint addresses
-    const whiteMint = (openings as OpeningsMap)[whiteEco];
-    const blackMint = (openings as OpeningsMap)[blackEco];
-    
-    const whiteOpeningInfo = { eco: whiteEco, mint: whiteMint };
-    const blackOpeningInfo = { eco: blackEco, mint: blackMint };
-
-    try {
-      // Get owners for both openings
-      const [whiteOwner, blackOwner] = await Promise.all([
-        whiteOpeningInfo.mint ? getNFTOwner(new PublicKey(whiteOpeningInfo.mint)).catch(() => null) : null,
-        blackOpeningInfo.mint ? getNFTOwner(new PublicKey(blackOpeningInfo.mint)).catch(() => null) : null
-      ]);
-
-      return {
-        white: {
-          ...whiteOpeningInfo,
-          owner: whiteOwner
-        },
-        black: {
-          ...blackOpeningInfo,
-          owner: blackOwner
-        }
-      };
-    } catch (e) {
-      // If there's an error fetching owners, return null owners
-      // This means the platform will get the royalties
-      console.warn('Error fetching NFT owners:', e);
-      return {
-        white: {
-          ...whiteOpeningInfo,
-          owner: null
-        },
-        black: {
-          ...blackOpeningInfo,
-          owner: null
-        }
-      };
+  const getFinalOpening = useCallback(async (moves: string[]): Promise<GameOpeningResult> => {
+    if (!moves || moves.length === 0) {
+      return null;
     }
+
+    const gameOpening: Opening | null = getOpeningFromMoves(moves);
+
+    if (!gameOpening) {
+      return null;
+    }
+
+    const eco = gameOpening.eco || 'A00'; // Default to A00 if no ECO
+    const mint = (openings as OpeningsMap)[eco] || null;
+    let owner: PublicKey | null = null;
+
+    if (mint) {
+      try {
+        owner = await getNFTOwner(new PublicKey(mint));
+    } catch (e) {
+        console.warn(`Error fetching NFT owner for mint ${mint}:`, e);
+        owner = null; // Ensure owner is null on error
+      }
+    }
+
+    return {
+      eco,
+      mint,
+      owner,
+      name: gameOpening.name,
+      pgnMoves: gameOpening.moves,
+    };
   }, [getNFTOwner]);
 
   // Prepares settlement accounts for the Solana transaction
   const prepareSettlementAccounts = useCallback(async (
     matchPda: PublicKey,
-    winner: PublicKey,
+    winner: PublicKey, // Winner can be SystemProgram.programId for draws
     moves: string[]
   ): Promise<SettlementAccounts> => {
-    // Define DEFAULT_PLATFORM_ADDRESS inside callback
-    const DEFAULT_PLATFORM_ADDRESS = new PublicKey('11111111111111111111111111111111');
-    
-    // Get the opening NFT owners
-    const openings = await getFinalOpenings(moves);
+    const gameOpeningDetails = await getFinalOpening(moves);
 
-    // Default to platform address if owners are not found or null/undefined
-    let whiteOwner: PublicKey;
-    let blackOwner: PublicKey;
-    
+    let openingOwnerPubkey: PublicKey;
+
+    if (gameOpeningDetails && gameOpeningDetails.owner) {
     try {
-      // Validate white owner is a valid PublicKey
-      whiteOwner = openings.white.owner || DEFAULT_PLATFORM_ADDRESS;
-      // Make sure it's a valid pubkey by trying to convert to string (will throw if invalid)
-      whiteOwner.toBase58();
+        // Validate owner is a valid PublicKey
+        openingOwnerPubkey = new PublicKey(gameOpeningDetails.owner);
+        openingOwnerPubkey.toBase58(); // Check if it's a valid base58 string
     } catch (e) {
-      console.warn('Invalid white opening owner, defaulting to platform address', e);
-      whiteOwner = DEFAULT_PLATFORM_ADDRESS;
-    }
-    
-    try {
-      // Validate black owner is a valid PublicKey
-      blackOwner = openings.black.owner || DEFAULT_PLATFORM_ADDRESS;
-      // Make sure it's a valid pubkey
-      blackOwner.toBase58();
-    } catch (e) {
-      console.warn('Invalid black opening owner, defaulting to platform address', e);
-      blackOwner = DEFAULT_PLATFORM_ADDRESS;
-    }
-    
-    // Additional safety check - contract can't handle same owner for both
-    // If they're the same, use platform address for black
-    if (whiteOwner.equals(blackOwner)) {
-      console.warn('White and black owners are the same, using platform for black');
-      blackOwner = DEFAULT_PLATFORM_ADDRESS;
+        console.warn('Invalid game opening owner, defaulting to platform address', e);
+        openingOwnerPubkey = PLATFORM_RAKE_PUBKEY;
+      }
+    } else {
+      // If no opening, no mint, or no owner, royalty goes to the platform
+      openingOwnerPubkey = PLATFORM_RAKE_PUBKEY;
     }
     
     return {
       matchAccount: matchPda,
       winner,
-      platform: DEFAULT_PLATFORM_ADDRESS,
-      whiteOwner,
-      blackOwner,
+      platform: PLATFORM_RAKE_PUBKEY, // Platform always gets its cut
+      openingOwner: openingOwnerPubkey,
     };
-  }, [getFinalOpenings]);
+  }, [getFinalOpening]);
 
-  // Helper to get only the ECO codes for immediate access
-  const getEcoCodes = useCallback(async (moves: string[]): Promise<{white: string, black: string}> => {
-    // Separate white and black moves
-    const whiteMoves = moves.filter((_, i) => i % 2 === 0);
-    const blackMoves = moves.filter((_, i) => i % 2 === 1);
-    
-    // Find the openings for white and black separately
-    const whiteOpening = getOpeningFromMoves(whiteMoves);
-    const blackOpening = getOpeningFromMoves(blackMoves);
-    
-    // Default to A00 for unknown openings
-    const whiteEco = whiteOpening?.eco || 'A00';
-    const blackEco = blackOpening?.eco || 'A00';
-    
-    return {
-      white: whiteEco,
-      black: blackEco
-    };
+  // Helper to get only the ECO code for immediate access
+  const getEcoCode = useCallback((moves: string[]): string | null => {
+    if (!moves || moves.length === 0) {
+      return null;
+    }
+    const gameOpening = getOpeningFromMoves(moves);
+    return gameOpening?.eco || null; // Return null if no opening, or the ECO code
   }, []);
 
   return {
-    getFinalOpenings,
+    getFinalOpening, // Renamed
     prepareSettlementAccounts,
-    getEcoCodes
+    getEcoCode, // Renamed
   };
 }; 

@@ -1,32 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAnchorWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import Link from 'next/link';
+import { usePlayerStats, PlayerStats } from '@/hooks/usePlayerStats';
+import { toast } from 'react-hot-toast';
 
-// Mock player data
-const mockPlayerStats = {
-  username: 'ChessMaster',
-  joinDate: '2023-05-15',
-  wins: 42,
-  losses: 18,
-  draws: 5,
-  winRate: 0.65,
-  totalStakeWon: 1250.5,
-  totalStakeLost: 450.25,
-  favoriteOpenings: [
-    { name: 'Sicilian Defense', eco: 'B20', plays: 15 },
-    { name: 'Queen\'s Gambit', eco: 'D02', plays: 12 },
-    { name: 'Ruy Lopez', eco: 'C60', plays: 8 },
-  ],
-  ownedNfts: [
-    { name: 'Sicilian Defense', eco: 'B20', royaltiesEarned: 25.5 },
-    { name: 'King\'s Indian', eco: 'E60', royaltiesEarned: 18.7 },
-  ],
-};
-
-// Mock game history
+// Mock game history - kept for now since we don't have game history tracking yet
 const mockGameHistory = [
   { id: 1, date: '2023-06-15', opponent: 'SolanaKnight', result: 'win', stake: 10.5, opening: 'Sicilian Defense' },
   { id: 2, date: '2023-06-14', opponent: 'CryptoRook', result: 'loss', stake: 5.25, opening: 'Queen\'s Gambit' },
@@ -38,6 +19,23 @@ const mockGameHistory = [
 export default function ProfilePage() {
   const wallet = useAnchorWallet();
   const [activeTab, setActiveTab] = useState<'games' | 'openings' | 'nfts'>('games');
+  const { playerStats, loading, error, initializePlayerStats } = usePlayerStats();
+  const [username, setUsername] = useState<string>('Chess Player');
+
+  // Initialize player stats if needed
+  useEffect(() => {
+    if (playerStats && !playerStats.initialized) {
+      initializePlayerStats();
+    }
+  }, [playerStats, initializePlayerStats]);
+
+  // Generate a username from the wallet address if no custom username
+  useEffect(() => {
+    if (wallet) {
+      const walletAddress = wallet.publicKey.toString();
+      setUsername(`Player ${walletAddress.substring(0, 4)}...${walletAddress.substring(walletAddress.length - 4)}`);
+    }
+  }, [wallet]);
 
   if (!wallet) {
     return (
@@ -51,6 +49,36 @@ export default function ProfilePage() {
     );
   }
 
+  if (loading) {
+    return (
+      <div className="max-w-7xl mx-auto py-16 px-4 sm:px-6 lg:px-8 text-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
+        <p className="mt-4 text-lg">Loading player stats...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="max-w-7xl mx-auto py-16 px-4 sm:px-6 lg:px-8 text-center">
+        <div className="bg-red-900/30 p-4 rounded-lg mb-6">
+          <p className="text-red-400">{error}</p>
+        </div>
+        <button 
+          onClick={() => window.location.reload()}
+          className="px-4 py-2 bg-primary rounded-lg"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  // Calculate win rate
+  const winRate = playerStats && playerStats.games > 0 
+    ? Math.round((playerStats.wins / playerStats.games) * 100) 
+    : 0;
+
   return (
     <div className="max-w-7xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
       <div className="bg-neutral rounded-xl shadow-lg overflow-hidden">
@@ -58,11 +86,13 @@ export default function ProfilePage() {
         <div className="bg-gradient-to-r from-purple-700 to-teal-600 px-6 py-8">
           <div className="flex flex-col md:flex-row items-center md:items-start gap-6">
             <div className="h-24 w-24 rounded-full bg-white/20 flex items-center justify-center text-3xl font-bold">
-              {mockPlayerStats.username.charAt(0)}
+              {username.charAt(0)}
             </div>
             <div className="flex-1 text-center md:text-left">
-              <h1 className="text-2xl font-bold">{mockPlayerStats.username}</h1>
-              <p className="text-white/70">Joined {new Date(mockPlayerStats.joinDate).toLocaleDateString()}</p>
+              <h1 className="text-2xl font-bold">{username}</h1>
+              <p className="text-white/70">
+                {playerStats?.isProvisional ? 'Provisional Player' : 'Established Player'}
+              </p>
               <p className="mt-2">
                 <span className="text-white/90">Wallet: </span>
                 <span className="text-white/70">{`${wallet.publicKey.toString().slice(0, 6)}...${wallet.publicKey.toString().slice(-4)}`}</span>
@@ -70,20 +100,34 @@ export default function ProfilePage() {
             </div>
             <div className="flex flex-wrap gap-4 justify-center md:justify-end">
               <div className="bg-white/10 rounded-lg px-4 py-2 min-w-[100px] text-center">
-                <div className="text-2xl font-bold">{mockPlayerStats.wins}</div>
+                <div className="text-2xl font-bold">{playerStats?.wins || 0}</div>
                 <div className="text-xs text-white/70">Wins</div>
               </div>
               <div className="bg-white/10 rounded-lg px-4 py-2 min-w-[100px] text-center">
-                <div className="text-2xl font-bold">{mockPlayerStats.losses}</div>
+                <div className="text-2xl font-bold">{(playerStats?.games || 0) - (playerStats?.wins || 0)}</div>
                 <div className="text-xs text-white/70">Losses</div>
               </div>
               <div className="bg-white/10 rounded-lg px-4 py-2 min-w-[100px] text-center">
-                <div className="text-2xl font-bold">{(mockPlayerStats.winRate * 100).toFixed(0)}%</div>
+                <div className="text-2xl font-bold">{winRate}%</div>
                 <div className="text-xs text-white/70">Win Rate</div>
+              </div>
+              <div className="bg-white/10 rounded-lg px-4 py-2 min-w-[120px] text-center">
+                <div className="text-2xl font-bold">{playerStats?.rating || 1200}</div>
+                <div className="text-xs text-white/70">ELO Rating</div>
               </div>
             </div>
           </div>
         </div>
+
+        {/* Provisional status indicator */}
+        {playerStats?.isProvisional && (
+          <div className="bg-yellow-900/20 p-4 border-l-4 border-yellow-500">
+            <p className="text-yellow-400">
+              <span className="font-bold">Provisional Status:</span> You've played {playerStats.games} of {10} games needed for a stable rating. 
+              Stake limit: 0.01 SOL until your rating is established.
+            </p>
+          </div>
+        )}
 
         {/* Profile tabs */}
         <div className="border-b border-gray-700">
@@ -125,7 +169,24 @@ export default function ProfilePage() {
         <div className="p-6">
           {activeTab === 'games' && (
             <div>
-              <h2 className="text-xl font-bold mb-4">Recent Games</h2>
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold">Recent Games</h2>
+                <div className="text-sm text-gray-300">
+                  {playerStats?.games || 0} games played
+                </div>
+              </div>
+              
+              {playerStats?.games === 0 ? (
+                <div className="bg-neutral/50 rounded-lg p-10 text-center">
+                  <p className="text-gray-300 mb-6">You haven't played any games yet.</p>
+                  <Link
+                    href="/play"
+                    className="px-6 py-2 bg-primary hover:bg-primary/80 rounded inline-block"
+                  >
+                    Start Playing
+                  </Link>
+                </div>
+              ) : (
               <div className="bg-neutral/30 rounded-lg shadow overflow-hidden">
                 <table className="min-w-full divide-y divide-gray-700">
                   <thead className="bg-neutral/70">
@@ -191,32 +252,21 @@ export default function ProfilePage() {
                   </tbody>
                 </table>
               </div>
-
-              <div className="mt-4 text-center">
-                <button className="px-4 py-2 text-sm bg-neutral hover:bg-neutral/70 rounded">
-                  Load More Games
-                </button>
-              </div>
+              )}
             </div>
           )}
 
           {activeTab === 'openings' && (
             <div>
               <h2 className="text-xl font-bold mb-4">Favorite Openings</h2>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {mockPlayerStats.favoriteOpenings.map((opening, index) => (
-                  <div key={index} className="bg-neutral/30 rounded-lg p-4 shadow">
-                    <h3 className="font-bold text-lg">{opening.name}</h3>
-                    <p className="text-sm text-gray-400">ECO: {opening.eco}</p>
-                    <p className="mt-2 text-sm">Played {opening.plays} times</p>
-                    <div className="mt-4 w-full bg-gray-700 rounded-full h-2.5">
-                      <div 
-                        className="bg-primary h-2.5 rounded-full" 
-                        style={{ width: `${(opening.plays / mockPlayerStats.favoriteOpenings.reduce((acc, curr) => acc + curr.plays, 0)) * 100}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                ))}
+              <div className="bg-neutral/50 rounded-lg p-10 text-center">
+                <p className="text-gray-300 mb-6">Opening statistics will be available after you've played more games.</p>
+                <Link
+                  href="/play"
+                  className="px-6 py-2 bg-primary hover:bg-primary/80 rounded inline-block"
+                >
+                  Play More Games
+                </Link>
               </div>
             </div>
           )}
@@ -224,28 +274,6 @@ export default function ProfilePage() {
           {activeTab === 'nfts' && (
             <div>
               <h2 className="text-xl font-bold mb-4">Owned Opening NFTs</h2>
-              {mockPlayerStats.ownedNfts.length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {mockPlayerStats.ownedNfts.map((nft, index) => (
-                    <div key={index} className="bg-neutral/30 rounded-lg shadow overflow-hidden">
-                      <div className="h-40 bg-gradient-to-r from-purple-500/20 to-teal-500/20 flex items-center justify-center">
-                        <span className="text-4xl">♞</span>
-                      </div>
-                      <div className="p-4">
-                        <h3 className="font-bold">{nft.name}</h3>
-                        <p className="text-sm text-gray-400">ECO: {nft.eco}</p>
-                        <div className="mt-2 flex justify-between items-center">
-                          <span className="text-sm text-gray-300">Royalties Earned:</span>
-                          <span className="text-yellow-400 font-bold">{nft.royaltiesEarned.toFixed(2)} ◎</span>
-                        </div>
-                        <button className="mt-4 w-full py-2 bg-primary/20 hover:bg-primary/30 rounded text-primary text-sm">
-                          View Details
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
                 <div className="text-center py-10 bg-neutral/30 rounded-lg">
                   <div className="text-4xl mb-4">♕</div>
                   <h3 className="text-xl font-bold mb-2">No Opening NFTs Yet</h3>
@@ -259,7 +287,6 @@ export default function ProfilePage() {
                     Browse Openings Marketplace
                   </Link>
                 </div>
-              )}
             </div>
           )}
         </div>

@@ -1,6 +1,28 @@
 import { Chess } from 'chess.js';
-import openingMints from './openings.json';
-import openings from '../../scripts/opening_data_out';
+// Attempt to import, but handle if they are missing/malformed later
+let openingMintsData: any = null;
+try {
+  openingMintsData = require('./openings.json');
+} catch (e) {
+  console.error("CRITICAL: Failed to load './openings.json'. Opening NFT mint lookups will fail.", e);
+  // openingMintsData remains null
+}
+
+let openingsRawData: any[] = [];
+try {
+  const importedOpenings = require('../../scripts/opening_data_out');
+  // Check if the default export is the array or if it's nested (e.g. { default: [...] })
+  if (Array.isArray(importedOpenings)) {
+    openingsRawData = importedOpenings;
+  } else if (importedOpenings && Array.isArray(importedOpenings.default)) {
+    openingsRawData = importedOpenings.default;
+  } else {
+    console.error("CRITICAL: '../../scripts/opening_data_out.js' did not provide a usable array of openings. Opening book will be empty.");
+  }
+} catch (e) {
+  console.error("CRITICAL: Failed to load '../../scripts/opening_data_out.js'. Opening book will be empty.", e);
+  // openingsRawData remains an empty array
+}
 
 export interface Opening {
   name: string;
@@ -40,19 +62,30 @@ function pgnToMoves(pgn: string): string[] {
 const openingBook: OpeningsMap = {};
 
 // Load openings into the book
-openings.forEach(opening => {
-  const moves = pgnToMoves(opening.pgn);
-  if (moves.length > 0) {
-    openingBook[opening.eco] = {
-      name: opening.name,
-      eco: opening.eco,
-      variant: opening.variant,
-      moves
-    };
-  } else {
-    console.warn(`Skipping opening ${opening.eco} due to invalid PGN`);
+try {
+  if (openingsRawData.length === 0) {
+    console.warn("Opening data (from opening_data_out) is empty. Opening book will not be populated.");
   }
-});
+  openingsRawData.forEach(opening => {
+    if (!opening || typeof opening.pgn !== 'string' || typeof opening.eco !== 'string' || typeof opening.name !== 'string') {
+      console.warn('Skipping malformed opening object:', opening);
+      return;
+    }
+    const moves = pgnToMoves(opening.pgn);
+    if (moves.length > 0) {
+      openingBook[opening.eco] = {
+        name: opening.name,
+        eco: opening.eco,
+        variant: opening.variant,
+        moves
+      };
+    } else {
+      console.warn(`Skipping opening ${opening.eco} due to invalid PGN`);
+    }
+  });
+} catch (e) {
+  console.error("CRITICAL: Failed to load opening data into the book.", e);
+}
 
 // Get opening info from a sequence of moves
 export function getOpeningFromMoves(moves: string[]): Opening | null {
@@ -105,7 +138,15 @@ export function getOpeningFromFen(): Opening | null {
 
 // Get NFT mint address for an opening
 export function getOpeningMint(eco: string): string | null {
-  return (openingMints as OpeningMints)[eco] || null;
+  if (!openingMintsData) {
+    console.error("Cannot get opening mint: openingMints data (openings.json) was not loaded.");
+    return null;
+  }
+  if (typeof eco !== 'string') {
+    console.warn('Invalid ECO code provided to getOpeningMint:', eco);
+    return null;
+  }
+  return (openingMintsData as OpeningMints)[eco] || null;
 }
 
 export default openingBook; 

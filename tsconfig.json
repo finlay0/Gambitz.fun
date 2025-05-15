@@ -5,15 +5,15 @@
     "lib": ["es2020", "dom"],
     "strict": true,
     "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "moduleResolution": "node",
     "resolveJsonModule": true,
+    "preserveSymlinks": true,
     "outDir": "dist",
-    "typeRoots": ["./node_modules/@types"],
-    "noImplicitAny": false,
     "types": ["node"]
   },
-  "include": ["scripts/**/*"],
+  "include": ["scripts/**/*", "src/**/*"],
   "exclude": ["node_modules"]
 } 

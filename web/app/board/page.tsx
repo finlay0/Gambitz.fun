@@ -4,18 +4,21 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useMatchmaker } from '@/hooks/useMatchmaker';
 import { useStakeSelector } from '@/hooks/useStakeSelector';
 import { Chessboard } from 'react-chessboard';
-import { useAnchorWallet } from '@solana/wallet-adapter-react';
-import { createResultVariant } from '@/types/wager';
+import { useAnchorWallet, useConnection } from '@solana/wallet-adapter-react';
+import { createResultVariant, PROGRAM_IDL, Match as OnChainMatchState } from '@/types/wager';
 import { Chess } from 'chess.js';
 import { useChessTimer } from '@/hooks/useChessTimer';
 import { toast } from 'react-hot-toast';
 import { Dialog } from '@headlessui/react';
 import { OpeningDisplay } from '../../src/components/OpeningDisplay';
-import { useGameState } from '@/hooks/useGameState';
+import { useGameState, Opening as GameStateOpening } from '@/hooks/useGameState';
 import { useOpeningRecognition } from '@/hooks/useOpeningRecognition';
 import { useFinalOpenings } from '@/hooks/useFinalOpenings';
-import { PublicKey } from '@solana/web3.js';
+import { PublicKey, SystemProgram } from '@solana/web3.js';
 import confetti from 'canvas-confetti';
+import { Program, AnchorProvider, web3 } from '@coral-xyz/anchor';
+import type { AnchorWallet } from '@solana/wallet-adapter-react';
+import { useSearchParams } from 'next/navigation';
 
 const formatTime = (seconds: number): string => {
   const mins = Math.floor(seconds / 60);
@@ -73,15 +76,34 @@ const MoveHistory = ({ moves, currentMove, onMoveClick }: MoveHistoryProps) => {
 };
 
 const BoardPage = () => {
-  const [stakeLamports] = useStakeSelector();
-  const { state, matchPda, submitResult, settleMatch } = useMatchmaker(stakeLamports);
+  const searchParams = useSearchParams();
+  const matchIdFromUrlString = searchParams.get('matchId');
+  const timeControlFromUrl = searchParams.get('timeControl');
+
+  const { stakeLamports: initialStakeForHook } = useStakeSelector(); 
+  
+  const {
+    matchmakerState,
+    matchmakerError,
+    matchDetails,
+    lastOpponentMoveDetails,
+    setLastOpponentMoveDetails,
+    createMatchOnChain,
+    confirmMatchOnChain,
+    submitResult,
+    settleMatch,
+    sendPlayerMove,
+    sendGameOverForAnalysis,
+  } = useMatchmaker(initialStakeForHook, timeControlFromUrl || "BLITZ_3_2");
+
   const wallet = useAnchorWallet();
+  const { connection } = useConnection();
   const [game, setGame] = useState<Chess | null>(null);
   const [position, setPosition] = useState<string>('');
   const [moves, setMoves] = useState<string[]>([]);
   const [currentMove, setCurrentMove] = useState(-1);
   const { timers, startTimers, stopTimers, switchActiveTimer } = useChessTimer(
-    matchPda?.toString() || '',
+    matchDetails.pda?.toString() || '',
     async (white: number, black: number) => {
       // TODO: Implement server time sync
       // This will be implemented when we add server-side time tracking
@@ -92,15 +114,24 @@ const BoardPage = () => {
   const [isResignDialogOpen, setIsResignDialogOpen] = useState(false);
   const [isGameOver, setIsGameOver] = useState(false);
   const [isRematchDialogOpen, setIsRematchDialogOpen] = useState(false);
-  const [rematchCountdown, setRematchCountdown] = useState(7); // 7 second countdown
+  const [rematchCountdown, setRematchCountdown] = useState(7);
   const rematchTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [playerColor, setPlayerColor] = useState<'white' | 'black' | null>(null);
-  const [isOpponentDisconnected] = useState(false);
+  const [isMyTurn, setIsMyTurn] = useState(false);
+  const [hasAttemptedOnChainAction, setHasAttemptedOnChainAction] = useState(false);
   const gameRef = useRef<Chess | null>(null);
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const { updateOpening, gameState } = useGameState();
-  const openingState = useOpeningRecognition(game?.history() || []);
-  const { getEcoCodes } = useFinalOpenings();
+  const {
+    updateOpening,
+    gameState,
+    setBoardInstance,
+    startGame: startGameInState,
+    makeMove: makeMoveInState,
+    endGame: endGameInState,
+    resetGame: resetGameState,
+  } = useGameState();
+  const openingStateFromRecognition = useOpeningRecognition(game?.history() || []);
+  const { getFinalOpening, getEcoCode: getEcoCodeForSettle } = useFinalOpenings();
 
   // Function to trigger confetti celebration for win
   const triggerWinConfetti = useCallback(() => {
@@ -113,9 +144,42 @@ const BoardPage = () => {
   }, []);
 
   const handleResultSubmission = useCallback(async (variant: 'mate' | 'resign' | 'timeout' | 'disconnect' | 'draw') => {
-    if (!matchPda || !wallet || !game) {
+    if (!matchDetails.pda || !wallet || !game) {
       toast.error('Wallet not connected or match not found');
       return;
+    }
+
+    // Determine winner for analysis message BEFORE submitting anything
+    let winnerKeyForAnalysis: string | null = null;
+    if (variant === 'draw' || variant === 'disconnect') { // Assuming disconnect might be a draw or needs server to decide winner based on who disconnected
+      winnerKeyForAnalysis = null; 
+    } else if (variant === 'mate') {
+      // The 'mate' variant in handleResultSubmission is called when the *local* player detects they have been mated,
+      // or they have mated the opponent. The current `wallet.publicKey` is the one submitting.
+      // If game.turn() is 'w' and player is black, white (opponent) won. If game.turn() is 'b' and player is white, black (opponent) won.
+      // However, the existing logic for settleMatch derives the winner correctly based on who *didn't* make the last move if it's a mate.
+      // For simplicity here, if it's a 'mate', the winner is the one whose turn it *isn't* according to chess.js
+      const turn = game.turn(); // 'w' or 'b'
+      if (playerColor === 'white') {
+        winnerKeyForAnalysis = turn === 'w' ? matchDetails.playerTwoKey?.toBase58() || null : wallet.publicKey.toBase58();
+      } else if (playerColor === 'black') {
+        winnerKeyForAnalysis = turn === 'b' ? matchDetails.playerOneKey?.toBase58() || null : wallet.publicKey.toBase58();
+      }
+      // Fallback if playerColor or opponent key is somehow null, though unlikely at this stage
+      if (!winnerKeyForAnalysis && wallet.publicKey) winnerKeyForAnalysis = wallet.publicKey.toBase58(); 
+
+    } else if (variant === 'resign' || variant === 'timeout') {
+      // If current player resigns or times out, opponent wins.
+      if (wallet.publicKey.equals(matchDetails.playerOneKey)) {
+        winnerKeyForAnalysis = matchDetails.playerTwoKey?.toBase58() || null;
+      } else if (wallet.publicKey.equals(matchDetails.playerTwoKey)) {
+        winnerKeyForAnalysis = matchDetails.playerOneKey?.toBase58() || null;
+      }
+    }
+
+    // Send game over message for analysis BEFORE on-chain submissions
+    if (matchDetails.pda) {
+      sendGameOverForAnalysis(matchDetails.pda.toString(), winnerKeyForAnalysis, variant);
     }
 
     setIsSubmitting(true);
@@ -125,31 +189,51 @@ const BoardPage = () => {
       setIsGameOver(true);
       toast.success(`Game ended: ${variant}`);
 
-      // Get the winner's public key
-      const winner = variant === 'resign' || variant === 'timeout' || variant === 'disconnect'
-        ? (playerColor === 'white' ? wallet.publicKey : new PublicKey(matchPda)) // opponent wins
-        : wallet.publicKey; // checkmate - current player wins (whoever called handleResultSubmission)
+      let winnerKeyForSettle: PublicKey;
 
-      // Show confetti if the current player won (only for checkmate)
-      if (variant === 'mate' && winner.equals(wallet.publicKey)) {
+      if (variant === 'draw') {
+        winnerKeyForSettle = SystemProgram.programId;
+      } else if (variant === 'mate') {
+        if (!wallet?.publicKey) throw new Error("Wallet not connected");
+        winnerKeyForSettle = wallet.publicKey;
+      } else {
+        if (!wallet?.publicKey || !matchDetails.pda) throw new Error("Wallet or Match PDA not available");
+        const provider = new AnchorProvider(connection, wallet as AnchorWallet, AnchorProvider.defaultOptions());
+        const program = new Program(PROGRAM_IDL, new PublicKey('GZJ54HYGi1Qx9GKeC9Ncbu2upkCwxGdrXxaQE9b2JVCM'), provider);
+        
+        try {
+          const matchData: OnChainMatchState = await program.account.match.fetch(matchDetails.pda);
+          if (wallet.publicKey.equals(matchData.playerOne)) {
+            winnerKeyForSettle = matchData.playerTwo;
+          } else if (wallet.publicKey.equals(matchData.playerTwo)) {
+            winnerKeyForSettle = matchData.playerOne;
+          } else {
+            console.error("Current wallet is not part of the match?");
+            toast.error("Error determining winner for settlement.");
+            setIsSubmitting(false);
+            return;
+          }
+        } catch (fetchError) {
+          console.error("Failed to fetch match data to determine winner:", fetchError);
+          toast.error("Failed to get match details for settlement.");
+          setIsSubmitting(false);
+          return;
+        }
+      }
+
+      if (variant === 'mate' && wallet?.publicKey && winnerKeyForSettle.equals(wallet.publicKey)) {
         triggerWinConfetti();
       }
 
-      // After submitting result, trigger settlement to distribute payouts including NFT royalties
       try {
-        // Only proceed with settlement logic if the game record has moves
         if (game.history().length > 0) {
-          // Get the opening ECO codes for both players to help with debugging
-          const ecoCodes = await getEcoCodes(game.history());
-          console.log('Found openings for settlement:', ecoCodes);
+          const ecoCode = getEcoCodeForSettle(game.history());
+          console.log('Found opening for settlement:', ecoCode);
           
-          // Settle the match with the full move history and winner
-          await settleMatch(game.history(), winner);
+          await settleMatch(game.history(), winnerKeyForSettle);
           toast.success('Match settled successfully!');
 
-          // After successful settlement, show rematch dialog
           setIsRematchDialogOpen(true);
-          // Start countdown timer
           setRematchCountdown(7);
           if (rematchTimerRef.current) {
             clearInterval(rematchTimerRef.current);
@@ -179,7 +263,7 @@ const BoardPage = () => {
       setIsSubmitting(false);
       setIsResignDialogOpen(false);
     }
-  }, [matchPda, wallet, submitResult, stopTimers, game, playerColor, settleMatch, getEcoCodes, triggerWinConfetti]);
+  }, [matchDetails.pda, wallet, connection, submitResult, stopTimers, game, playerColor, settleMatch, getEcoCodeForSettle, triggerWinConfetti, sendGameOverForAnalysis]);
 
   // Initialize game
   useEffect(() => {
@@ -203,184 +287,90 @@ const BoardPage = () => {
     };
   }, []);
 
-  // Handle opponent disconnection
+  // Logic to initiate on-chain match creation or confirmation
   useEffect(() => {
-    if (isOpponentDisconnected && !isGameOver) {
-      handleResultSubmission('disconnect');
-    }
-  }, [isOpponentDisconnected, isGameOver, handleResultSubmission]);
+    if (matchmakerState === 'matched' && matchDetails.pda && matchDetails.playerOneKey && matchDetails.playerTwoKey && wallet?.publicKey && !hasAttemptedOnChainAction) {
+      // Ensure this logic only runs once per matchDetails update
+      setHasAttemptedOnChainAction(true);
 
-  // Start timers when game starts
-  useEffect(() => {
-    if (state === 'matched' && !isGameOver && game) {
-      startTimers();
-      // Set player color based on match state
-      setPlayerColor(state === 'matched' ? 'white' : 'black');
-    }
-  }, [state, startTimers, isGameOver, game]);
+      const isPlayerOne = wallet.publicKey.equals(matchDetails.playerOneKey);
+      const isPlayerTwo = wallet.publicKey.equals(matchDetails.playerTwoKey);
 
-  // Detect opening based on moves
-  useEffect(() => {
-    if (state === 'matched' && game && openingState.eco) {
-      const color = playerColor === 'white' ? 'white' : 'black';
-      updateOpening(color, {
-        eco: openingState.eco,
-        name: openingState.name || 'Unknown Opening',
-        nftOwner: null // This will be populated by the NFT system
-      });
-    }
-  }, [state, game, openingState, playerColor, updateOpening]);
-
-  const getErrorMessage = (error: Error, variant: string): string => {
-    if (error.message?.includes('insufficient funds')) {
-      return 'Insufficient funds to submit result';
-    } else if (error.message?.includes('not authorized')) {
-      return 'You are not authorized to submit this result';
-    } else if (error.message?.includes('already submitted')) {
-      return 'Result has already been submitted';
-    } else if (error.message?.includes('invalid state')) {
-      return 'Game is not in a valid state to submit result';
-    } else if (error.message?.includes('timeout')) {
-      return 'Transaction timed out. Please try again';
-    } else if (error.message?.includes('network error')) {
-      return 'Network error. Please check your connection';
-    } else {
-      return `Failed to submit ${variant} result. Please try again.`;
-    }
-  };
-
-  const handleResign = useCallback(() => setIsResignDialogOpen(true), []);
-  const handleCheckmate = useCallback(() => handleResultSubmission('mate'), [handleResultSubmission]);
-  const handleTimeout = useCallback(() => handleResultSubmission('timeout'), [handleResultSubmission]);
-  const handleDisconnect = useCallback(() => handleResultSubmission('disconnect'), [handleResultSubmission]);
-
-  // Add timeout check in the timer effect
-  useEffect(() => {
-    if (state === 'matched' && !isGameOver && game) {
-      const checkTimeout = () => {
-        if (timers.active === 'white' && timers.white <= 0) {
-          handleTimeout();
-        } else if (timers.active === 'black' && timers.black <= 0) {
-          handleTimeout();
-        }
-      };
-
-      timerIntervalRef.current = setInterval(checkTimeout, 1000);
-      return () => {
-        if (timerIntervalRef.current) {
-          clearInterval(timerIntervalRef.current);
-        }
-      };
-    }
-  }, [state, timers.white, timers.black, timers.active, handleTimeout, isGameOver, game]);
-
-  // Add disconnect handling
-  useEffect(() => {
-    const handleBeforeUnload = () => {
-      if (state === 'matched' && !isSubmitting && !isGameOver) {
-        handleDisconnect();
-      }
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [state, isSubmitting, handleDisconnect, isGameOver]);
-
-  const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
-    if (isGameOver || !game || !playerColor) return false;
-
-    try {
-      // Validate move is legal
-      const move = game.move({
-        from: sourceSquare,
-        to: targetSquare,
-        promotion: 'q' // Always promote to queen for simplicity
-      });
-
-      if (move) {
-        setPosition(game.fen());
-        setMoves(prev => {
-          const newMoves = [...prev, move.san];
-          setCurrentMove(newMoves.length - 1);
-          return newMoves;
-        });
-        switchActiveTimer();
-
-        // Check for game end conditions
-        if (game.isCheckmate()) {
-          handleCheckmate();
-        } else if (game.isDraw()) {
-          let drawMessage = 'Game ended in a draw';
-          if (game.isStalemate()) {
-            drawMessage = 'Game ended in stalemate';
-          } else if (game.isThreefoldRepetition()) {
-            drawMessage = 'Game ended in threefold repetition';
-          } else if (game.isInsufficientMaterial()) {
-            drawMessage = 'Game ended due to insufficient material';
+      // It's crucial to also check if the match account already exists on-chain 
+      // before attempting to create it, and its state before confirming.
+      // This requires an async fetch of the account data.
+      
+      const checkAndPerformOnChainAction = async () => {
+        try {
+          const provider = new AnchorProvider(connection, wallet as AnchorWallet, AnchorProvider.defaultOptions());
+          const program = new Program(PROGRAM_IDL, new PublicKey('GZJ54HYGi1Qx9GKeC9Ncbu2upkCwxGdrXxaQE9b2JVCM'), provider);
+          let onChainMatchData: OnChainMatchState | null = null;
+          try {
+            onChainMatchData = await program.account.match.fetch(matchDetails.pda!);
+          } catch (e) {
+            // Likely means account not found, which is fine if P1 is about to create it
+            console.log("Match account not found on-chain, P1 might need to create it.");
           }
-          toast(drawMessage, { 
-            icon: 'ℹ️',
-            style: {
-              background: '#3B82F6',
-              color: '#fff',
+
+          if (isPlayerOne) {
+            if (!onChainMatchData) {
+              toast.info("You are Player 1. Creating the match on-chain...");
+              await createMatchOnChain(); // Uses details from matchDetails state
+            } else {
+              toast.info("Match already exists on-chain (P1).");
+              // Potentially check if P2 needs to confirm if that info is available
             }
-          });
-          handleResultSubmission('draw');
-          setIsGameOver(true);
-          stopTimers();
+          } else if (isPlayerTwo) {
+            if (onChainMatchData && onChainMatchData.startSlot === 0) { // Assuming startSlot === 0 means unconfirmed
+              toast.info("You are Player 2. Confirming the match on-chain...");
+              await confirmMatchOnChain();
+            } else if (onChainMatchData) {
+              toast.info("Match already confirmed or in an unexpected state (P2).");
+            } else {
+              toast.warn("You are Player 2, but match account not yet created by Player 1.");
+            }
+          }
+        } catch (error) {
+          console.error("Error during on-chain action check:", error);
+          toast.error("Error interacting with on-chain match.");
         }
+      };
 
-        return true;
-      }
-    } catch (error) {
-      console.error('Invalid move:', error);
-      toast.error('Invalid move');
+      checkAndPerformOnChainAction();
     }
-    return false;
-  };
+  }, [matchmakerState, matchDetails, wallet, connection, createMatchOnChain, confirmMatchOnChain, hasAttemptedOnChainAction]);
 
-  const handleMoveClick = (moveIndex: number) => {
-    if (isGameOver || !game) return;
-
-    try {
-      // Create a new game instance and replay moves up to the clicked move
-      const tempGame = new Chess();
-      for (let i = 0; i <= moveIndex; i++) {
-        tempGame.move(moves[i]);
-      }
-      setPosition(tempGame.fen());
-      setCurrentMove(moveIndex);
-    } catch (error) {
-      console.error('Failed to replay moves:', error);
-      toast.error('Failed to replay moves');
+  // Determine player color based on matchDetails and wallet pubkey
+  useEffect(() => {
+    if (matchDetails.playerOneKey && matchDetails.playerTwoKey && wallet?.publicKey) {
+      setPlayerColor(wallet.publicKey.equals(matchDetails.playerOneKey) ? 'white' : 'black');
+      setIsMyTurn(wallet.publicKey.equals(matchDetails.playerOneKey));
+    } else {
+      setPlayerColor(null);
+      setIsMyTurn(false);
     }
-  };
-
-  const returnToCurrentPosition = () => {
-    if (isGameOver || !game) return;
-
-    try {
-      // Replay all moves to get to the current position
-      const tempGame = new Chess();
-      for (const move of moves) {
-        tempGame.move(move);
+  }, [matchDetails.playerOneKey, matchDetails.playerTwoKey, wallet?.publicKey]);
+  
+  // Initialize game and timers when match is fully confirmed and ready
+  useEffect(() => {
+    if (matchmakerState === 'matched' && matchDetails.pda && playerColor && game) { // Ensure playerColor is set
+      // Potentially fetch on-chain match state to confirm it's ready (e.g., startSlot != 0)
+      // For now, assume 'matched' from server means it is ready to start timers after P1/P2 actions.
+      console.log("Match is considered ready, starting timers if not already game over.");
+      if (!isGameOver) {
+          startTimers();
       }
-      setPosition(tempGame.fen());
-      setCurrentMove(moves.length - 1);
-    } catch (error) {
-      console.error('Failed to return to current position:', error);
-      toast.error('Failed to return to current position');
     }
-  };
+  }, [matchmakerState, matchDetails.pda, playerColor, game, startTimers, isGameOver]);
 
   // Cleanup game state on unmount
   useEffect(() => {
     return () => {
-      if (state === 'matched' && !isGameOver) {
-        handleDisconnect();
+      if (matchmakerState === 'matched' && !isGameOver) {
+        handleResultSubmission('disconnect');
       }
     };
-  }, [state, isGameOver, handleDisconnect]);
+  }, [matchmakerState, isGameOver, handleResultSubmission]);
 
   // Function to handle rematch request
   const handleRematch = useCallback(() => {
@@ -429,6 +419,241 @@ const BoardPage = () => {
     };
   }, []);
 
+  const getErrorMessage = (error: Error, variant: string): string => {
+    if (error.message?.includes('insufficient funds')) {
+      return 'Insufficient funds to submit result';
+    } else if (error.message?.includes('not authorized')) {
+      return 'You are not authorized to submit this result';
+    } else if (error.message?.includes('already submitted')) {
+      return 'Result has already been submitted';
+    } else if (error.message?.includes('invalid state')) {
+      return 'Game is not in a valid state to submit result';
+    } else if (error.message?.includes('timeout')) {
+      return 'Transaction timed out. Please try again';
+    } else if (error.message?.includes('network error')) {
+      return 'Network error. Please check your connection';
+    } else {
+      return `Failed to submit ${variant} result. Please try again.`;
+    }
+  };
+
+  const handleResign = useCallback(() => setIsResignDialogOpen(true), []);
+  const handleCheckmate = useCallback(() => handleResultSubmission('mate'), [handleResultSubmission]);
+  const handleTimeout = useCallback(() => handleResultSubmission('timeout'), [handleResultSubmission]);
+  const handleDisconnect = useCallback(() => handleResultSubmission('disconnect'), [handleResultSubmission]);
+
+  // Add timeout check in the timer effect
+  useEffect(() => {
+    if (matchmakerState === 'matched' && !isGameOver && game) {
+      const checkTimeout = () => {
+        if (timers.active === 'white' && timers.white <= 0) {
+          handleTimeout();
+        } else if (timers.active === 'black' && timers.black <= 0) {
+          handleTimeout();
+        }
+      };
+
+      timerIntervalRef.current = setInterval(checkTimeout, 1000);
+      return () => {
+        if (timerIntervalRef.current) {
+          clearInterval(timerIntervalRef.current);
+        }
+      };
+    }
+  }, [matchmakerState, timers.white, timers.black, timers.active, handleTimeout, isGameOver, game]);
+
+  // Add disconnect handling
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (matchmakerState === 'matched' && !isSubmitting && !isGameOver) {
+        handleDisconnect();
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [matchmakerState, isSubmitting, handleDisconnect, isGameOver]);
+
+  // Effect to handle opponent's move
+  useEffect(() => {
+    if (lastOpponentMoveDetails && gameRef.current && matchDetails.playerOneKey) {
+      const { moveSan, isPlayerOneTurnAfterMove } = lastOpponentMoveDetails;
+      
+      const localGame = gameRef.current;
+      const moveResult = localGame.move(moveSan);
+
+      if (moveResult) {
+        setPosition(localGame.fen());
+        setMoves(localGame.history());
+        toast(`Opponent played: ${moveSan}`);
+        
+        // Update whose turn it is based on server's message
+        if (wallet?.publicKey) {
+            const amIPlayerOne = wallet.publicKey.equals(matchDetails.playerOneKey);
+            setIsMyTurn(amIPlayerOne ? isPlayerOneTurnAfterMove : !isPlayerOneTurnAfterMove);
+        }
+
+        // Switch timers
+        if (matchDetails.pda) { // Ensure match PDA is available to switch timers
+            switchActiveTimer(); 
+        }
+
+        // Check for game over condition from local chess.js instance after opponent's move
+        if (localGame.isGameOver()) {
+            setIsGameOver(true);
+            stopTimers();
+            // Determine result type based on localGame state
+            let resultType: 'mate' | 'draw' = 'draw'; // Default to draw
+            if (localGame.isCheckmate()) resultType = 'mate';
+            // TODO: Handle other draw types like stalemate, threefold repetition, etc.
+            // For now, only checkmate from opponent triggers automatic result submission.
+            if (resultType === 'mate') {
+                // If opponent checkmated us, call handleResultSubmission
+                // The winner will be the opponent, which handleResultSubmission should deduce.
+                toast.error('Checkmate!');
+                handleResultSubmission('mate');
+            }
+        }
+
+      } else {
+        console.error("Failed to apply opponent's move locally:", moveSan);
+        toast.error("Error applying opponent's move.");
+        // Request game state resync from server? (future enhancement)
+      }
+      // Reset the last opponent move so this effect doesn't run again for the same move
+      setLastOpponentMoveDetails(null);
+    }
+  }, [lastOpponentMoveDetails, setLastOpponentMoveDetails, wallet, matchDetails, switchActiveTimer, stopTimers, handleResultSubmission]);
+
+  const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
+    if (isGameOver || !game || !isMyTurn || currentMove !== moves.length - 1) return false;
+
+    try {
+      const move = game.move({
+        from: sourceSquare,
+        to: targetSquare,
+        promotion: 'q', // Always promote to queen for simplicity
+      });
+
+      if (move) {
+        setPosition(game.fen());
+        const newMoveHistory = [...moves, move.san];
+        setMoves(newMoveHistory);
+        makeMoveInState(move.san, game.fen()); // Update useGameState
+        setCurrentMove(newMoveHistory.length - 1);
+        
+        // Send move to opponent via WebSocket
+        if (matchDetails.pda) {
+          sendPlayerMove(matchDetails.pda.toString(), move.san, game.fen());
+        }
+        
+        setLastOpponentMoveDetails(null); // Clear last opponent move details after our move
+        switchActiveTimer();
+        setIsMyTurn(false);
+
+        if (game.isGameOver()) {
+          let resultVariant: 'mate' | 'draw' = 'mate';
+          if (game.isCheckmate()) {
+            resultVariant = 'mate';
+          } else if (game.isDraw() || game.isStalemate() || game.isThreefoldRepetition() || game.isInsufficientMaterial()) {
+            resultVariant = 'draw';
+          }
+          handleResultSubmission(resultVariant);
+        }
+        return true;
+      } else {
+        toast.error('Invalid move');
+        return false;
+      }
+    } catch (error) {
+      console.error('Error making move:', error);
+      // Attempt to revert to the last known good state if chess.js throws
+      if (moves.length > 0) {
+        const lastFen = game.history({ verbose: true }).slice(-2, -1)[0]?.after || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+        game.load(lastFen); // Ensure game object is consistent
+        setPosition(lastFen);
+      } else {
+        game.reset();
+        setPosition(game.fen());
+      }
+      toast.error('Illegal move attempt.');
+      return false;
+    }
+  };
+
+  const handleMoveClick = (moveIndex: number) => {
+    if (isGameOver || !game) return;
+
+    try {
+      // Create a new game instance and replay moves up to the clicked move
+      const tempGame = new Chess();
+      for (let i = 0; i <= moveIndex; i++) {
+        tempGame.move(moves[i]);
+      }
+      setPosition(tempGame.fen());
+      setCurrentMove(moveIndex);
+    } catch (error) {
+      console.error('Failed to replay moves:', error);
+      toast.error('Failed to replay moves');
+    }
+  };
+
+  const returnToCurrentPosition = () => {
+    if (isGameOver || !game) return;
+
+    try {
+      // Replay all moves to get to the current position
+      const tempGame = new Chess();
+      for (const move of moves) {
+        tempGame.move(move);
+      }
+      setPosition(tempGame.fen());
+      setCurrentMove(moves.length - 1);
+    } catch (error) {
+      console.error('Failed to return to current position:', error);
+      toast.error('Failed to return to current position');
+    }
+  };
+
+  const activeMatchPdaForGame = matchDetails.pda || (matchIdFromUrlString ? new PublicKey(matchIdFromUrlString) : null);
+
+  // Effect to initialize and update the Chess instance in useGameState
+  useEffect(() => {
+    const newGameInstance = new Chess();
+    setGame(newGameInstance);
+    setBoardInstance(newGameInstance); // Initialize in useGameState
+    setPosition(newGameInstance.fen());
+    // When game instance changes (e.g. on new match), reset relevant local state
+    setMoves([]);
+    setCurrentMove(-1);
+    setIsGameOver(false);
+    // Make sure to call resetGameState or specific setters if more state needs reset
+    // resetGameState(); // Potentially too broad, consider targeted resets
+  }, [matchDetails.pda, setBoardInstance]); // React to match PDA changing for new games
+
+  // Effect to update gameOpening in useGameState when opening is recognized
+  useEffect(() => {
+    if (game && game.history().length > 0) {
+      const currentMoveHistory = game.history();
+      getFinalOpening(currentMoveHistory).then(finalOpeningResult => {
+        if (finalOpeningResult) {
+          const gameOpeningForState: GameStateOpening = {
+            eco: finalOpeningResult.eco,
+            name: finalOpeningResult.name,
+            variant: openingStateFromRecognition.variant, // Get variant from useOpeningRecognition
+            nftOwner: finalOpeningResult.owner,
+          };
+          updateOpening(gameOpeningForState);
+        } else {
+          updateOpening(null); // No opening found or an error occurred
+        }
+      }).catch(error => {
+        console.error("Error getting final opening:", error);
+        updateOpening(null);
+      });
+    }
+  }, [game, openingStateFromRecognition, getFinalOpening, updateOpening]); // Dependencies: game history (via openingState) and recognition state
+
   if (!game) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-background text-white">
@@ -440,7 +665,7 @@ const BoardPage = () => {
     );
   }
 
-  if (state === 'searching') {
+  if (matchmakerState === 'searching') {
     return (
       <div className="flex items-center justify-center min-h-screen bg-background text-white">
         <div className="text-center">
@@ -582,18 +807,21 @@ const BoardPage = () => {
         </div>
       </Dialog>
       {/* Opening Display */}
-      <div className="openings-container">
-        <OpeningDisplay
-          opening={gameState.openings.white}
-          color="white"
-          isCurrentPlayer={playerColor === 'white'}
-        />
-        <OpeningDisplay
-          opening={gameState.openings.black}
-          color="black"
-          isCurrentPlayer={playerColor === 'black'}
-        />
-      </div>
+      {gameState.gameOpening && (
+        <div className="mt-4 w-full max-w-md mx-auto p-2 bg-neutral-focus rounded-lg shadow">
+          <OpeningDisplay
+            opening={gameState.gameOpening} // Use the single gameOpening from useGameState
+            // color prop is removed as it might not be relevant for a single display
+            // isCurrentPlayer prop is removed, can be re-added if OpeningDisplay needs it
+          />
+        </div>
+      )}
+      {matchmakerState === 'error' && matchmakerError && (
+        <div className="absolute top-4 right-4 bg-red-600 text-white p-3 rounded-md shadow-lg">
+          <p className="font-semibold">Matchmaking Error!</p>
+          <p className="text-sm">{matchmakerError}</p>
+        </div>
+      )}
     </div>
   );
 };

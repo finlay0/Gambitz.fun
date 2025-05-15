@@ -6,7 +6,7 @@ import { getOpeningFromMoves, getOpeningMint, Opening, default as actualOpeningB
 import { Chess } from 'chess.js';
 import { useGameState, GameState } from '../useGameState';
 import { useOpeningOwner } from '../useOpeningOwner';
-import { useFinalOpenings } from '../useFinalOpenings';
+import { useFinalOpenings, GameOpeningResult, SettlementAccounts } from '../useFinalOpenings';
 import { PublicKey } from '@solana/web3.js';
 /* eslint-enable @typescript-eslint/no-unused-vars */
 
@@ -85,29 +85,69 @@ const masterTestOpening = {
   bookMovesLength: actualA08InBook.moves.length, // Should be 15 for this specific opening
 };
 
+// Mock useHelius for getNFTOwner called within the actual getFinalOpening
+const mockGetNFTOwner = jest.fn();
+jest.mock('../useHelius', () => ({
+  useHelius: () => ({
+    getNFTOwner: mockGetNFTOwner,
+  }),
+}));
+
+// Mock the actual useFinalOpenings hook but use real helper functions internally where needed
 jest.mock('../useFinalOpenings', () => {
+  const originalModule = jest.requireActual('../useFinalOpenings');
+  const { PLATFORM_RAKE_PUBKEY } = originalModule; // Get actual constant if needed
+  // Import actual helper functions needed for the mock
+  const { getOpeningFromMoves: actualGetOpeningFromMovesHelper, getOpeningMint: actualGetOpeningMintHelper } = jest.requireActual('../../../lib/opening_data');
+
+
+  // We will use the *actual* implementation of getOpeningFromMoves for the mock of getFinalOpening
+  // and the *actual* openings.json for mint lookup (via getOpeningMint).
+  // getNFTOwner will be mocked via useHelius mock.
+
   return {
+    __esModule: true,
+    ...originalModule, // Spread original module to keep PLATFORM_RAKE_PUBKEY etc.
     useFinalOpenings: () => ({
-      getFinalOpenings: jest.fn().mockImplementation(async (moves) => {
-        // Separate white and black moves for testing
-        const whiteMoves = moves.filter((_, i) => i % 2 === 0);
-        const blackMoves = moves.filter((_, i) => i % 2 === 1);
-        
-        // Mock getOpeningFromMoves locally to avoid circular dependencies
-        const whiteOpening = actualOpeningBook['A08']; // Hardcoded for test
-        const blackOpening = actualOpeningBook['A05']; // Different opening for black
+      getFinalOpening: jest.fn().mockImplementation(async (moves: string[]): Promise<GameOpeningResult | null> => {
+        const gameOpening = actualGetOpeningFromMovesHelper(moves); // Use correctly imported helper
+        if (!gameOpening) return null;
+
+        const eco = gameOpening.eco || 'A00';
+        const mint = actualGetOpeningMintHelper(eco); // Use correctly imported helper
+        let owner: PublicKey | null = null;
+        if (mint) {
+          try {
+            // This uses the mocked getNFTOwner from useHelius mock
+            owner = await mockGetNFTOwner(new PublicKey(mint)); 
+          } catch (e) {
+            console.warn('Mock getNFTOwner error:', e);
+            owner = null;
+          }
+        }
+        return {
+          eco,
+          mint,
+          owner,
+          name: gameOpening.name,
+          pgnMoves: gameOpening.moves, // Corrected from gameOpening.bookMoves to match type
+        };
+      }),
+      getEcoCode: jest.fn().mockImplementation((moves: string[]): string | null => {
+        const gameOpening = actualGetOpeningFromMovesHelper(moves); // Use correctly imported helper
+        return gameOpening?.eco || null;
+      }),
+      prepareSettlementAccounts: jest.fn().mockImplementation(async (matchPda: PublicKey, winner: PublicKey, moves: string[]): Promise<SettlementAccounts> => {
+        // This mock implementation calls the *actual* getFinalOpening from the original module.
+        // The actual getFinalOpening uses the actual getOpeningFromMoves, actual getOpeningMint, 
+        // and the *mocked* useHelius().getNFTOwner via the useHelius mock. This is intended.
+        const openingDetails = await (jest.requireActual('../useFinalOpenings').useFinalOpenings().getFinalOpening(moves));
         
         return {
-          white: {
-            eco: whiteOpening.eco,
-            mint: 'WhiteMintAddress123',
-            owner: null
-          },
-          black: {
-            eco: blackOpening.eco,
-            mint: 'BlackMintAddress456',
-            owner: null
-          }
+          matchAccount: matchPda,
+          winner,
+          platform: new PublicKey(PLATFORM_RAKE_PUBKEY), 
+          openingOwner: openingDetails?.owner || new PublicKey(PLATFORM_RAKE_PUBKEY), // Default to platform if no owner
         };
       })
     })
@@ -281,41 +321,61 @@ describe('Opening Recognition Pipeline - Master End to End Test', () => {
     });
   });
 
-  it('should properly separate white and black opening ECOs at end of game', async () => {
-    const { result: gameState } = renderHook(() => useGameState());
+  it('should correctly identify the game opening and its details', async () => {
+    const { result: gameStateHook } = renderHook(() => useGameState());
     
-    // A sequence with different openings for white and black
-    const completeGame = [
-      // White plays King's Indian Attack (A08)
+    const gameMoves = [
+      // King's Indian Attack (A08)
       "Nf3", "d5", "g3", "c5", "Bg2", "Nc6", "O-O", "e6", 
-      // Black plays King's Indian Defence (A05)
-      "d3", "Nf6", "Nbd2", "Be7", "e4", "O-O", "Re1", "e5",
-      // Additional moves beyond opening book
-      "c4", "d4", "cxd5", "Nxd5", "Nc4", "Be6", "Nfxe5", "Nxe5",
-      "Nxe5", "Bf6", "Nc4", "Nf4", "Ne3", "Bxb2", "Rb1", "Bc3"
+      "d3", "Nf6", "Nbd2", "Be7", "e4", "O-O", "Re1", // End of A08 book line
+      // Additional moves
+      "c4", "d4", "cxd5", "Nxd5"
     ];
     
-    // Play all the moves
     act(() => {
-      completeGame.forEach(move => {
-        gameState.current.dispatch({ type: 'MAKE_MOVE', move });
+      gameMoves.forEach(move => {
+        gameStateHook.current.dispatch({ type: 'MAKE_MOVE', move });
       });
     });
     
-    // Verify the full move history
-    expect(gameState.current.state.moveHistory).toEqual(completeGame);
+    expect(gameStateHook.current.state.moveHistory).toEqual(gameMoves);
     
-    // Test the getFinalOpenings hook
+    // Mock the return value of getNFTOwner for this specific test
+    const mockOwnerPubkey = new PublicKey("DUSTMSwDGrMiQ2H6s2M9P5pRk35mR7w4z25X2S2gA7bB");
+    mockGetNFTOwner.mockResolvedValue(mockOwnerPubkey);
+
     const { result: finalOpeningsHook } = renderHook(() => useFinalOpenings());
-    const finalOpenings = await finalOpeningsHook.current.getFinalOpenings(gameState.current.state.moveHistory);
+    const finalOpening = await finalOpeningsHook.current.getFinalOpening(gameStateHook.current.state.moveHistory);
     
-    // White should have the A08 ECO, Black should have A05
-    expect(finalOpenings.white.eco).toBe('A08');
-    expect(finalOpenings.black.eco).toBe('A05');
+    expect(finalOpening).not.toBeNull();
+    if (finalOpening) {
+        expect(finalOpening.eco).toBe(masterTestOpening.eco); // Use masterTestOpening
+        expect(finalOpening.name).toBe(masterTestOpening.name); // Use masterTestOpening
+        // finalOpening.mint comes from getOpeningMint(eco) in the mock. Assert against that.
+        // masterTestOpening itself doesn't have a 'mint' property.
+        const expectedMint = (jest.requireActual('../../../lib/opening_data').getOpeningMint)(masterTestOpening.eco);
+        expect(finalOpening.mint).toBe(expectedMint);
+        expect(finalOpening.owner).toEqual(mockOwnerPubkey);
+    }
+
+    // Test getEcoCode as well
+    const ecoCode = finalOpeningsHook.current.getEcoCode(gameStateHook.current.state.moveHistory);
+    expect(ecoCode).toBe(masterTestOpening.eco); // Use masterTestOpening
     
-    // Different mint addresses for each ECO
-    expect(finalOpenings.white.mint).toBe('WhiteMintAddress123');
-    expect(finalOpenings.black.mint).toBe('BlackMintAddress456');
+    // Test prepareSettlementAccounts (basic check)
+    const matchPda = new PublicKey("11111111111111111111111111111111");
+    const winner = new PublicKey("22222222222222222222222222222222");
+    const settlementAccounts = await finalOpeningsHook.current.prepareSettlementAccounts(matchPda, winner, gameStateHook.current.state.moveHistory);
+    expect(settlementAccounts.openingOwner).toEqual(mockOwnerPubkey);
+    expect(settlementAccounts.platform).toEqual(new PublicKey(PLATFORM_RAKE_PUBKEY));
+
+    // Test case where no owner is found for NFT
+    mockGetNFTOwner.mockResolvedValue(null); // Simulate NFT owner not found
+    const finalOpeningNoOwner = await finalOpeningsHook.current.getFinalOpening(gameStateHook.current.state.moveHistory);
+    expect(finalOpeningNoOwner?.owner).toBeNull();
+    const settlementAccountsNoOwner = await finalOpeningsHook.current.prepareSettlementAccounts(matchPda, winner, gameStateHook.current.state.moveHistory);
+    expect(settlementAccountsNoOwner.openingOwner).toEqual(new PublicKey(PLATFORM_RAKE_PUBKEY)); // Defaults to platform
+
   });
 
 });

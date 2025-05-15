@@ -8,7 +8,9 @@
     "prepare": "husky install",
     "mint:openings": "ts-node scripts/mint_openings.ts",
     "tree:create": "ts-node scripts/create_nft_tree.ts",
-    "gen:openings": "ts-node scripts/gen_openings_json.ts"
+    "gen:openings": "ts-node scripts/gen_openings_json.ts",
+    "build": "tsc --skipLibCheck",
+    "typecheck": "tsc --noEmit --skipLibCheck"
   },
   "pnpm": {
     "overrides": {
@@ -23,10 +25,13 @@
     "@metaplex-foundation/mpl-bubblegum": "^4.4.0",
     "@mliebelt/pgn-parser": "^1.4.16",
     "@solana/web3.js": "^1.98.0",
+    "@types/cors": "^2.8.18",
     "@types/crypto-js": "^4.2.2",
+    "@types/express": "^5.0.1",
     "@types/mocha": "^10.0.10",
     "@types/node": "^20.17.30",
     "@types/node-fetch": "2",
+    "@types/ws": "^8.18.1",
     "crypto-js": "^4.2.0",
     "csv-parse": "^5.6.0",
     "husky": "^8.0.0",
@@ -39,6 +44,7 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
+    "@coral-xyz/anchor": "^0.29.0",
     "@metaplex-foundation/umi": "^1.2.0",
     "@metaplex-foundation/umi-bundle-defaults": "^1.2.0",
     "@metaplex-foundation/umi-signer-wallet-adapters": "^1.2.0",
@@ -46,9 +52,13 @@
     "@types/ioredis": "^5.0.0",
     "bs58": "^6.0.0",
     "chess.js": "^1.2.0",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
     "ioredis": "^5.6.1",
-    "node-fetch": "2",
+    "node-fetch": "^2.7.0",
     "swr": "^2.3.3",
+    "winston": "^3.17.0",
+    "ws": "^8.18.2",
     "zstd-codec": "^0.1.5"
   }
 }
