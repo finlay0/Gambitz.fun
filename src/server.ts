@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
 import http from 'http';
 import WebSocket from 'ws';
 import cors from 'cors';
@@ -27,12 +27,12 @@ const wss = new WebSocket.Server({ server });
 const matchmakingService = new MatchmakingService(wss, RPC_URL, PROGRAM_ID);
 
 // API routes
-app.get('/health', (req, res) => {
+app.get('/health', (req: Request, res: Response) => {
   res.json({ status: 'ok' });
 });
 
 // Get server time for client clock synchronization
-app.get('/api/time', (req, res) => {
+app.get('/api/time', (req: Request, res: Response) => {
   res.json({ 
     timestamp: Date.now(),
     message: 'Current server time'

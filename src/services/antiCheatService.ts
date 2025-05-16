@@ -87,8 +87,8 @@ export class AntiCheatService {
             };
             
             process.stdout.on('data', onData);
-            process.stderr.on('data', (data) // Separate handler for stderr for logging, but UCI output is mainly stdout
-                => console.error(`Stockfish STDERR: ${data.toString().trim()}`)
+            process.stderr.on('data', (data) => // Separate handler for stderr for logging, but UCI output is mainly stdout
+                console.error(`Stockfish STDERR: ${data.toString().trim()}`)
             );
             process.on('error', onError);
             process.on('close', onClose);

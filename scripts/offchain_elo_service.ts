@@ -8,6 +8,7 @@ import {
 import bs58_raw = require('bs58'); // Import the raw module
 const bs58 = (bs58_raw as any).default || bs58_raw; // Check for a .default property
 import { Buffer } from 'buffer';
+import { ParquetSchema } from '@dsnp/parquetjs';
 
 // Import as any to avoid type compatibility issues
 const idlJson = require('../contracts/target/idl/wager_converted.json');

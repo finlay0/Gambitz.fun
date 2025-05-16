@@ -19,7 +19,7 @@ const memes = [
   { eco: "Z10", name: "Bongcloud Counter-Gambit", pgn: "1. e4 e5 2. Ke2 Ke7", ecos: ["Z10"] }
 ];
 
-function ply(pgn) { return (pgn.match(/\d+\./g) || []).length * 2; }
+function ply(pgn: string) { return (pgn.match(/\d+\./g) || []).length * 2; }
 
 async function main() {
   const all = [];
@@ -92,13 +92,15 @@ async function main() {
   // Convert map to array with unique ecos, filter out any with ecos: []
   const canonical = Array.from(byKey.values())
     .map(e => {
-      const obj = {
+      const obj: { eco: string; name: string; pgn: string; ecos: string[]; variant?: string } = {
         eco: e.eco,
         name: e.name,
         pgn: e.pgn,
-        ecos: Array.from(e.ecos)
+        ecos: Array.from(e.ecos as Set<string>)
       };
-      if (e.variant && e.variant.trim()) obj.variant = e.variant;
+      if (e.variant && e.variant.trim()) {
+        obj.variant = e.variant;
+      }
       return obj;
     })
     .filter(e => e.ecos.length > 0); // Remove any with no ecos

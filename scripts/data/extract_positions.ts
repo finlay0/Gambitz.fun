@@ -7,7 +7,7 @@ import { pipeline } from 'stream/promises';
 import { ZstdCodec } from 'zstd-codec';
 import * as readline from 'readline';
 import * as chess from 'chess.js';
-import { ParquetWriter } from '@dsnp/parquetjs';
+import { ParquetWriter, ParquetSchema } from '@dsnp/parquetjs';
 import * as commander from 'commander';
 
 // Define the command line options
@@ -37,7 +37,7 @@ const TIME_CONTROL_PATTERN = options.timeControl;
 const MAX_POSITIONS = parseInt(options.limit, 10);
 const VERBOSE = options.verbose;
 
-// Define the schema for our Parquet file
+// Define the schema for our Parquet file (This seems unused, keeping for now)
 const schema = {
   fen: { type: 'UTF8' },
   move: { type: 'UTF8' },
@@ -52,7 +52,7 @@ const schema = {
 };
 
 // Define Parquet schema format
-const parquetSchema = {
+const parquetSchemaDefinition = {
   fen: { type: 'UTF8' },
   move: { type: 'UTF8' },
   eval: { type: 'FLOAT' },
@@ -64,6 +64,7 @@ const parquetSchema = {
   game_id: { type: 'UTF8' },
   ply: { type: 'INT32' }
 };
+const parquetSchemaInstance = new ParquetSchema(parquetSchemaDefinition);
 
 // Message frequency controls
 const PROGRESS_UPDATE_INTERVAL = 10000; // positions
@@ -80,7 +81,7 @@ async function extractPositions(): Promise<void> {
   console.log(`Maximum positions: ${MAX_POSITIONS}`);
   
   // Create Parquet writer
-  const writer = await ParquetWriter.openFile(parquetSchema, OUTPUT_FILE, { compression: 'SNAPPY' });
+  const writer = await ParquetWriter.openFile(parquetSchemaInstance, OUTPUT_FILE, { compression: 'SNAPPY' });
   
   let currentGame: {
     headers: Record<string, string>;

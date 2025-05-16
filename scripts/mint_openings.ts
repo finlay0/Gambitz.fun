@@ -1,5 +1,6 @@
 import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
-import { createSignerFromKeypair, signerIdentity, publicKey as umiPublicKey, PublicKey as UmiPublicKey } from '@metaplex-foundation/umi';
+import { createSignerFromKeypair, signerIdentity } from '@metaplex-foundation/umi';
+import { publicKey as umiPublicKey, type PublicKey as UmiPublicKey } from '@metaplex-foundation/umi/publicKeys';
 import { fromWeb3JsKeypair } from '@metaplex-foundation/umi-web3js-adapters';
 import { mintV1, findLeafAssetIdPda } from '@metaplex-foundation/mpl-bubblegum';
 import { Keypair, Connection, clusterApiUrl, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
